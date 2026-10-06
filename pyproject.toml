@@ -12,6 +12,11 @@ markers = ["integration: needs the PostgreSQL container (skipped if it is not re
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["notebooks"]     # notebooks call src/ functions; their cells are not linted
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# Markdown templates: table rows cannot be wrapped.
+"src/ml/model_cards.py" = ["E501"]

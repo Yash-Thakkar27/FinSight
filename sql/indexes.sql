@@ -20,3 +20,7 @@ CREATE INDEX IF NOT EXISTS ix_companies_peer_group
 -- Data Quality page: filter a run's results by severity / status
 CREATE INDEX IF NOT EXISTS ix_data_quality_logs_run
     ON core.data_quality_logs (run_id, severity, status);
+
+-- Data Science Lab: metrics for one model / horizon, forecasts for one company
+CREATE INDEX IF NOT EXISTS ix_ml_metrics_lookup
+    ON core.ml_metrics (scope, horizon, model, metric);

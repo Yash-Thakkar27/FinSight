@@ -6,7 +6,7 @@
 
 Steps: 1 fetch, 2 save raw, 3 clean, 4 validate, 5 upsert to PostgreSQL,
 6 recompute metrics, 7 regenerate exports, 8 write the pipeline_runs row.
-See src/pipeline.py. Steps 6 and 7 are added in Phases 4 and 8.
+See src/pipeline.py. Step 7 is added in Phase 8.
 
 --tickers limits what is fetched. Cleaning, validation and loading always cover
 the whole universe, using the latest snapshot on disk for every ticker.
