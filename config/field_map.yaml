@@ -1,0 +1,145 @@
+# Source field name -> canonical field name, for yfinance statements.
+#
+# Layout:  statement -> canonical_field -> {unit, sources: [ordered source labels]}
+# The cleaning pipeline takes the FIRST listed source label that has a non-null
+# value for a period. Labels were confirmed against live data on 2026-10-06
+# (docs/data_source_inspection.md). A canonical field with no usable label for a
+# company is stored as NULL with a missing_reason, never as 0.
+#
+# applies_to (optional): sector types the field is meaningful for. A field that
+# is absent for a sector type outside this list is classified `not_applicable`
+# rather than `unavailable_from_source`.
+
+income:
+  revenue:
+    unit: INR
+    sources: [Total Revenue, Operating Revenue]
+  gross_profit:
+    unit: INR
+    sources: [Gross Profit]
+    applies_to: [non_financial]
+  ebitda:
+    unit: INR
+    sources: [EBITDA]            # reported EBITDA, not Yahoo's "Normalized EBITDA"
+    applies_to: [non_financial]
+  ebit:
+    unit: INR
+    sources: [EBIT]
+    applies_to: [non_financial]
+  operating_income:
+    unit: INR
+    sources: [Operating Income]
+    applies_to: [non_financial]
+  depreciation_amortization:
+    unit: INR
+    sources: [Reconciled Depreciation, Depreciation And Amortization In Income Statement]
+  net_income:
+    unit: INR
+    sources: [Net Income, Net Income Common Stockholders]
+  eps_basic:
+    unit: INR_per_share
+    sources: [Basic EPS]
+  eps_diluted:
+    unit: INR_per_share
+    sources: [Diluted EPS]
+  interest_expense:
+    unit: INR
+    sources: [Interest Expense]
+  interest_income:
+    unit: INR
+    sources: [Interest Income]
+  net_interest_income:
+    unit: INR
+    sources: [Net Interest Income]
+    applies_to: [bank, nbfc]
+
+balance:
+  total_assets:
+    unit: INR
+    sources: [Total Assets]
+  total_liabilities:
+    unit: INR
+    sources: [Total Liabilities Net Minority Interest]
+  total_equity:                  # equity attributable to shareholders, excl. minority interest
+    unit: INR
+    sources: [Stockholders Equity, Common Stock Equity]
+  total_equity_incl_minority:
+    unit: INR
+    sources: [Total Equity Gross Minority Interest]
+  minority_interest:
+    unit: INR
+    sources: [Minority Interest]
+  total_debt:
+    unit: INR
+    sources: [Total Debt]
+  cash_and_equivalents:
+    unit: INR
+    sources: [Cash And Cash Equivalents]
+  cash_and_short_term_investments:
+    unit: INR
+    sources: [Cash Cash Equivalents And Short Term Investments]
+    applies_to: [non_financial]
+  current_assets:
+    unit: INR
+    sources: [Current Assets]
+    applies_to: [non_financial]
+  current_liabilities:
+    unit: INR
+    sources: [Current Liabilities]
+    applies_to: [non_financial]
+  inventory:                     # needed for the quick ratio
+    unit: INR
+    sources: [Inventory]
+    applies_to: [non_financial]
+  shares_outstanding:
+    unit: shares
+    sources: [Ordinary Shares Number, Share Issued]
+  total_loans:
+    unit: INR
+    sources: [Net Loan]
+    applies_to: [bank, nbfc]
+  total_deposits:                # not returned by yfinance for HDFCBANK.NS (see inspection report)
+    unit: INR
+    sources: [Total Deposits]
+    applies_to: [bank, nbfc]
+
+cashflow:
+  operating_cash_flow:
+    unit: INR
+    sources: [Operating Cash Flow]
+  capex:                         # source sign is negative; stored as a positive outflow
+    unit: INR
+    sources: [Capital Expenditure]
+    sign: -1
+  free_cash_flow:
+    unit: INR
+    sources: [Free Cash Flow]
+
+# Daily price columns from Ticker.history(auto_adjust=False)
+market_prices:
+  Open: open
+  High: high
+  Low: low
+  Close: close
+  Adj Close: adj_close
+  Volume: volume
+
+# Ticker.info keys
+company_metadata:
+  longName: source_name
+  exchange: exchange
+  sector: source_sector
+  industry: source_industry
+  country: country
+  currency: currency
+  financialCurrency: financial_currency
+  sharesOutstanding: shares_outstanding
+
+# Ticker.info multiples, stored separately and reconciled against calculated values
+source_reported_metrics:
+  marketCap: market_cap
+  enterpriseValue: enterprise_value
+  trailingPE: pe_ratio
+  priceToBook: pb_ratio
+  enterpriseToEbitda: ev_ebitda
+  enterpriseToRevenue: ev_revenue

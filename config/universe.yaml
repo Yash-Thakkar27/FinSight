@@ -1,0 +1,135 @@
+# FinSight company universe. This file is the only place the universe is defined.
+# sector_type: non_financial | bank | nbfc | insurance
+# peer_group: comps are drawn from the same peer_group by default.
+
+benchmark:
+  ticker: "^NSEI"
+  name: Nifty 50
+
+# Risk-free rate is a documented config value, never fetched silently.
+# value is an annual rate as a decimal. A single constant rate is used for the
+# whole history (simplification, see docs/assumptions.md). Supplied by the
+# project owner on 2026-10-06.
+risk_free_rate:
+  value: 0.052599       # 5.2599% annualized, implicit yield at cut-off
+  instrument: "91-day Government of India T-bill, RBI weekly auction"
+  source: "RBI press release 'Treasury Bills: Full Auction Result', https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=63500"
+  as_of_date: 2026-09-02
+
+trading_days_per_year: 252
+price_history_years: 5
+
+companies:
+  # Information Technology
+  - ticker: TCS.NS
+    name: Tata Consultancy Services
+    sector: Information Technology
+    industry: IT Services
+    peer_group: it_services
+    sector_type: non_financial
+  - ticker: INFY.NS
+    name: Infosys
+    sector: Information Technology
+    industry: IT Services
+    peer_group: it_services
+    sector_type: non_financial
+  - ticker: HCLTECH.NS
+    name: HCL Technologies
+    sector: Information Technology
+    industry: IT Services
+    peer_group: it_services
+    sector_type: non_financial
+  - ticker: WIPRO.NS
+    name: Wipro
+    sector: Information Technology
+    industry: IT Services
+    peer_group: it_services
+    sector_type: non_financial
+
+  # Banks
+  - ticker: HDFCBANK.NS
+    name: HDFC Bank
+    sector: Financials
+    industry: Private Sector Banks
+    peer_group: private_banks
+    sector_type: bank
+  - ticker: ICICIBANK.NS
+    name: ICICI Bank
+    sector: Financials
+    industry: Private Sector Banks
+    peer_group: private_banks
+    sector_type: bank
+  - ticker: AXISBANK.NS
+    name: Axis Bank
+    sector: Financials
+    industry: Private Sector Banks
+    peer_group: private_banks
+    sector_type: bank
+  - ticker: KOTAKBANK.NS
+    name: Kotak Mahindra Bank
+    sector: Financials
+    industry: Private Sector Banks
+    peer_group: private_banks
+    sector_type: bank
+
+  # Pharma
+  - ticker: SUNPHARMA.NS
+    name: Sun Pharmaceutical Industries
+    sector: Pharmaceuticals
+    industry: Pharmaceuticals
+    peer_group: pharma
+    sector_type: non_financial
+  - ticker: CIPLA.NS
+    name: Cipla
+    sector: Pharmaceuticals
+    industry: Pharmaceuticals
+    peer_group: pharma
+    sector_type: non_financial
+  - ticker: DRREDDY.NS
+    name: Dr. Reddy's Laboratories
+    sector: Pharmaceuticals
+    industry: Pharmaceuticals
+    peer_group: pharma
+    sector_type: non_financial
+
+  # Auto
+  # Tata Motors is excluded after its 2025 demerger (docs/limitations.md);
+  # Bajaj Auto takes its place.
+  - ticker: BAJAJ-AUTO.NS
+    name: Bajaj Auto
+    sector: Auto
+    industry: Automobile Manufacturers
+    peer_group: auto
+    sector_type: non_financial
+  - ticker: "M&M.NS"
+    name: Mahindra & Mahindra
+    sector: Auto
+    industry: Automobile Manufacturers
+    peer_group: auto
+    sector_type: non_financial
+  - ticker: MARUTI.NS
+    name: Maruti Suzuki India
+    sector: Auto
+    industry: Automobile Manufacturers
+    peer_group: auto
+    sector_type: non_financial
+
+  # Consumer
+  - ticker: HINDUNILVR.NS
+    name: Hindustan Unilever
+    sector: Consumer
+    industry: FMCG
+    peer_group: consumer
+    sector_type: non_financial
+  - ticker: ITC.NS
+    name: ITC
+    sector: Consumer
+    industry: FMCG
+    peer_group: consumer
+    sector_type: non_financial
+  - ticker: ASIANPAINT.NS
+    name: Asian Paints
+    sector: Consumer
+    industry: Paints
+    peer_group: consumer
+    sector_type: non_financial

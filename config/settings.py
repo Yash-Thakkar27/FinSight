@@ -1,0 +1,129 @@
+"""Project configuration.
+
+Two sources:
+- `.env`                  -> database credentials (DatabaseSettings)
+- `config/universe.yaml`  -> companies, benchmark, risk-free rate (Universe)
+
+Nothing about the universe is hard-coded anywhere else in the project.
+"""
+
+from datetime import date
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal
+
+import yaml
+from pydantic import BaseModel, Field, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_DIR = PROJECT_ROOT / "config"
+DATA_DIR = PROJECT_ROOT / "data"
+RAW_DIR = DATA_DIR / "raw"
+PROCESSED_DIR = DATA_DIR / "processed"
+EXPORTS_DIR = DATA_DIR / "exports"
+SQL_DIR = PROJECT_ROOT / "sql"
+DOCS_DIR = PROJECT_ROOT / "docs"
+LOG_DIR = PROJECT_ROOT / "logs"
+
+SectorType = Literal["non_financial", "bank", "nbfc", "insurance"]
+
+
+class DatabaseSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=PROJECT_ROOT / ".env", extra="ignore")
+
+    postgres_user: str
+    postgres_password: str
+    postgres_db: str
+    postgres_host: str = "localhost"
+    postgres_port: int = 5433
+
+    @property
+    def url(self) -> str:
+        """SQLAlchemy URL using the psycopg (v3) driver."""
+        return (
+            f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+
+class IngestionSettings(BaseSettings):
+    """Retry and pacing for source requests. Override with INGEST_* in .env."""
+
+    model_config = SettingsConfigDict(
+        env_file=PROJECT_ROOT / ".env", env_prefix="INGEST_", extra="ignore"
+    )
+
+    max_attempts: int = 4
+    backoff_seconds: float = 2.0       # wait = backoff_seconds * 2^(attempt - 1)
+    rate_limit_wait_seconds: float = 30.0
+    pause_seconds: float = 0.4         # polite gap between requests
+
+
+class Company(BaseModel):
+    ticker: str
+    name: str
+    sector: str
+    industry: str
+    peer_group: str
+    sector_type: SectorType
+
+
+class Benchmark(BaseModel):
+    ticker: str
+    name: str
+
+
+class RiskFreeRate(BaseModel):
+    value: float | None = Field(default=None, ge=0, le=1)
+    instrument: str | None = None
+    source: str | None = None
+    as_of_date: date | None = None
+
+    @model_validator(mode="after")
+    def _value_needs_provenance(self):
+        if self.value is not None and not (self.instrument and self.source and self.as_of_date):
+            raise ValueError("risk_free_rate.value requires instrument, source and as_of_date")
+        return self
+
+    def daily(self, trading_days: int = 252) -> float | None:
+        """Daily compounding equivalent: (1 + r)^(1/trading_days) - 1. None if no rate is set."""
+        if self.value is None:
+            return None
+        return (1 + self.value) ** (1 / trading_days) - 1
+
+
+class Universe(BaseModel):
+    benchmark: Benchmark
+    risk_free_rate: RiskFreeRate
+    trading_days_per_year: int = 252
+    price_history_years: int = 5
+    companies: list[Company]
+
+    @model_validator(mode="after")
+    def _tickers_unique(self):
+        tickers = [c.ticker for c in self.companies]
+        duplicates = {t for t in tickers if tickers.count(t) > 1}
+        if duplicates:
+            raise ValueError(f"duplicate tickers in universe.yaml: {sorted(duplicates)}")
+        return self
+
+    @property
+    def tickers(self) -> list[str]:
+        return [c.ticker for c in self.companies]
+
+
+@lru_cache
+def get_database_settings() -> DatabaseSettings:
+    return DatabaseSettings()
+
+
+@lru_cache
+def get_ingestion_settings() -> IngestionSettings:
+    return IngestionSettings()
+
+
+@lru_cache
+def get_universe(path: Path = CONFIG_DIR / "universe.yaml") -> Universe:
+    with open(path, encoding="utf-8") as f:
+        return Universe.model_validate(yaml.safe_load(f))
