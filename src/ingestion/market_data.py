@@ -13,6 +13,7 @@ from src.ingestion.common import SOURCE, EmptyResponseError, IngestResult, fetch
 log = logging.getLogger(__name__)
 
 DATASET = "market_prices"
+FX_DATASET = "fx_rates"
 PERIOD_TYPE = "daily"
 
 
@@ -29,16 +30,17 @@ def fetch_prices(ticker_obj: yf.Ticker, years: int) -> pd.DataFrame:
 
 
 def ingest_prices(ticker: str, ticker_obj: yf.Ticker, years: int,
-                  raw_dir: Path = RAW_DIR) -> IngestResult:
-    result = IngestResult(ticker=ticker, dataset=DATASET, period_type=PERIOD_TYPE, status="failed")
+                  raw_dir: Path = RAW_DIR, dataset: str = DATASET) -> IngestResult:
+    """Fetch and save a daily price history. Also used for FX series (dataset=FX_DATASET)."""
+    result = IngestResult(ticker=ticker, dataset=dataset, period_type=PERIOD_TYPE, status="failed")
     try:
-        df = fetch_with_retry(lambda: fetch_prices(ticker_obj, years), f"{ticker} {DATASET}")
+        df = fetch_with_retry(lambda: fetch_prices(ticker_obj, years), f"{ticker} {dataset}")
     except Exception as exc:
         result.error = f"{type(exc).__name__}: {exc}"
         return result
 
     retrieved_at = raw_store.utc_now()
-    meta = raw_store.make_meta(SOURCE, DATASET, ticker, PERIOD_TYPE, retrieved_at)
+    meta = raw_store.make_meta(SOURCE, dataset, ticker, PERIOD_TYPE, retrieved_at)
     path = raw_store.save_frame(df, meta, raw_dir)
     result.status = "ok"
     result.rows, result.columns = df.shape

@@ -1,7 +1,7 @@
 """Run ingestion for the universe and write a manifest of what was saved.
 
 For each company: metadata, daily prices, and six statement tables.
-For the benchmark: daily prices only.
+For the benchmark: daily prices only. For each configured FX series: daily rates.
 
 A failure in one dataset or ticker is logged and recorded; the run continues.
 The manifest (data/raw/_manifests/{run timestamp}.json) lists every dataset's
@@ -23,7 +23,7 @@ from src.ingestion import raw_store
 from src.ingestion.common import SOURCE, IngestResult
 from src.ingestion.company_metadata import ingest_metadata
 from src.ingestion.financial_data import STATEMENT_ATTRIBUTES, ingest_statement
-from src.ingestion.market_data import ingest_prices
+from src.ingestion.market_data import FX_DATASET, ingest_prices
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +58,19 @@ def ingest_ticker(ticker: str, years: int, with_fundamentals: bool,
     return results
 
 
+def ingest_fx(ticker: str, years: int, raw_dir: Path = RAW_DIR) -> IngestResult:
+    """Fetch and save one FX series. Never raises."""
+    try:
+        result = ingest_prices(ticker, yf.Ticker(ticker), years, raw_dir, dataset=FX_DATASET)
+    except Exception as exc:
+        log.exception("%s: unexpected ingestion error", ticker)
+        result = IngestResult(ticker=ticker, dataset=FX_DATASET, period_type="daily",
+                              status="failed", error=f"{type(exc).__name__}: {exc}")
+    if result.status == "failed":
+        log.error("%s %s: FAILED (%s)", result.ticker, result.dataset, result.error)
+    return result
+
+
 def write_manifest(results: list[IngestResult], started_at, finished_at,
                    requested: list[str], raw_dir: Path = RAW_DIR) -> Path:
     folder = raw_dir / MANIFEST_DIR_NAME
@@ -81,8 +94,11 @@ def run_ingestion(universe: Universe, tickers: list[str] | None = None,
     """Ingest the whole universe (or the given tickers) plus the benchmark."""
     settings = get_ingestion_settings()
     company_tickers = universe.tickers
+    fx_tickers = [fx.ticker for fx in universe.fx.values()]
     if tickers:
-        unknown = sorted(set(tickers) - set(company_tickers) - {universe.benchmark.ticker})
+        unknown = sorted(
+            set(tickers) - set(company_tickers) - {universe.benchmark.ticker} - set(fx_tickers)
+        )
         if unknown:
             raise ValueError(f"tickers not in config/universe.yaml: {unknown}")
         company_tickers = [t for t in company_tickers if t in tickers]
@@ -98,7 +114,15 @@ def run_ingestion(universe: Universe, tickers: list[str] | None = None,
         results += ingest_ticker(universe.benchmark.ticker, universe.price_history_years,
                                  False, raw_dir, settings.pause_seconds)
 
-    requested = company_tickers + ([universe.benchmark.ticker] if include_benchmark else [])
+    fx_requested = []
+    for fx in universe.fx.values():
+        if not tickers or fx.ticker in tickers:
+            time.sleep(settings.pause_seconds)
+            results.append(ingest_fx(fx.ticker, fx.history_years, raw_dir))
+            fx_requested.append(fx.ticker)
+
+    requested = (company_tickers + ([universe.benchmark.ticker] if include_benchmark else [])
+                 + fx_requested)
     manifest = write_manifest(results, started_at, raw_store.utc_now(), requested, raw_dir)
 
     counts = Counter(r.status for r in results)

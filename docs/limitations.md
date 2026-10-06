@@ -21,6 +21,10 @@ inspection on 2026-10-06 (`docs/data_source_inspection.md`); the figures quoted 
    - Consequence: TTM figures can only be built when the last 4 quarters are present **and
      contiguous**. Otherwise the latest annual figure is used and labelled as such.
 
+3a. **Quarterly completeness is low.** In the 2026-10-06 data, 22.8% of applicable statement fields
+    have no value, almost all of them quarterly: annual completeness is 77–100% per company,
+    quarterly 41–86%. 59 company-periods fall below the 80% completeness threshold.
+
 4. **Quarterly cash flow is mostly unavailable.** In the 2026-10-06 ingestion run it was empty for
    **13 of 17 companies** (returned only for TCS, Infosys, Wipro and Dr. Reddy's). Quarterly and TTM
    cash-flow metrics will be N/A for most companies; annual cash flow is used instead.
@@ -44,6 +48,28 @@ inspection on 2026-10-06 (`docs/data_source_inspection.md`); the figures quoted 
     empty table both when Yahoo has no data and when an internal request fails quietly. FinSight
     records these as `empty` (unavailable from source). A later refresh that does return data will
     simply add a newer snapshot.
+
+8b. **Infosys statements are served in USD and translated by FinSight.** Flows are converted at the
+    period-average USD/INR rate and balances at the period-end rate (`methodology.md` 2.4). The
+    results are close to, but not the same as, the INR figures Infosys itself reports, and its
+    growth rates in INR include exchange-rate movement. Infosys is flagged `original_currency = USD`
+    on every monetary row.
+
+8c. **Yahoo's `financialCurrency` flag is unreliable.** It reports USD for HCLTech, whose statements
+    are in INR. Statement currency is therefore set by hand per company and guarded by a scale
+    check; a company added to the universe needs the same verification. Yahoo's own summary
+    figures for such companies (enterprise value, revenue) may be in a different currency from its
+    statements and are only used for reconciliation.
+
+8d. **The source can return incomplete recent rows.** A fetch just after midnight IST on 2026-10-07
+    returned the latest trading day with no close for all 18 tickers; a fetch an hour earlier had
+    it. Such rows are repaired from an earlier snapshot or rejected (`methodology.md` 2.5), so the
+    latest date can be missing until the next refresh.
+
+8e. **Placeholder rows on exchange holidays.** Yahoo emits flat, zero-volume rows for stocks on
+    days the exchange was closed (116 rows across the universe; none for the Nifty 50). They are
+    flagged, not removed. No exchange holiday calendar is used, so the flag relies on the pattern
+    (zero volume, price unchanged), which would also catch a genuine no-trade day.
 
 ## Corporate actions
 

@@ -143,3 +143,5 @@ source_reported_metrics:
   priceToBook: pb_ratio
   enterpriseToEbitda: ev_ebitda
   enterpriseToRevenue: ev_revenue
+  trailingEps: trailing_eps      # also used to sanity-check statement currency scale
+  bookValue: book_value_per_share

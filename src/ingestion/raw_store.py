@@ -105,15 +105,20 @@ def read_json(path: Path | str) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))["payload"]
 
 
-def latest_snapshot(source: str, dataset: str, ticker: str,
-                    raw_dir: Path = RAW_DIR) -> Path | None:
-    """Most recent snapshot for a ticker and dataset, or None if there is none.
+def list_snapshots(source: str, dataset: str, ticker: str,
+                   raw_dir: Path = RAW_DIR) -> list[Path]:
+    """All snapshots for a ticker and dataset, oldest first.
 
-    File names are UTC timestamps in a sortable format, so the latest file is
-    the last one in name order.
+    File names are UTC timestamps in a sortable format, so name order is time order.
     """
     folder = raw_dir / source / dataset / ticker
     if not folder.is_dir():
-        return None
-    files = sorted(p for p in folder.iterdir() if p.suffix in (".parquet", ".json"))
+        return []
+    return sorted(p for p in folder.iterdir() if p.suffix in (".parquet", ".json"))
+
+
+def latest_snapshot(source: str, dataset: str, ticker: str,
+                    raw_dir: Path = RAW_DIR) -> Path | None:
+    """Most recent snapshot for a ticker and dataset, or None if there is none."""
+    files = list_snapshots(source, dataset, ticker, raw_dir)
     return files[-1] if files else None

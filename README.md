@@ -2,8 +2,8 @@
 
 **Financial Markets & Comparable Companies Analytics Platform (Indian Equities)**
 
-> Work in progress. Phases 1–2 of 9 are complete (environment, configuration, database, data-source
-> inspection, ingestion with raw snapshots). This README covers setup only and is completed in Phase 9.
+> Work in progress. Phases 1–3 of 9 are complete (environment, configuration, database, data-source
+> inspection, ingestion with raw snapshots, cleaning, validation, database load). This README covers setup only and is completed in Phase 9.
 
 FinSight is an analytics tool, not investment advice.
 
@@ -49,15 +49,18 @@ Use `py -m venv .venv` and `.venv\Scripts\activate`. Run PostgreSQL with Docker 
 ```bash
 python scripts/init_db.py             # create schemas, tables, indexes; seed reference data
 python scripts/init_db.py --reset     # drop everything first (deletes all data)
-python scripts/update_data.py         # fetch the universe and save raw snapshots (needs network)
-python scripts/update_data.py --tickers TCS.NS INFY.NS
+python scripts/update_data.py         # fetch, clean, validate, load; prints the quality report
+python scripts/update_data.py --tickers TCS.NS INFY.NS    # limit the fetch
+python scripts/update_data.py --skip-fetch                # rebuild from raw snapshots, offline
+psql -h localhost -p 5433 -U finsight -d finsight -f sql/analytical_queries.sql
 python scripts/inspect_source.py      # regenerate docs/data_source_inspection.md (needs network)
-pytest                                # offline tests
+pytest                                # no network; DB tests use a separate finsight_test database
 ruff check .
 ```
 
 ## Documentation
 
 - `docs/data_source_inspection.md`: what the source actually returns (fields, periods, units)
+- `docs/methodology.md`: cleaning conventions, validation checks, loading
 - `docs/assumptions.md`: assumptions and open decisions
 - `docs/limitations.md`: known limitations

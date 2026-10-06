@@ -128,9 +128,22 @@ CREATE TABLE IF NOT EXISTS core.market_prices (
     close         NUMERIC(20, 6),
     adj_close     NUMERIC(20, 6),
     volume        BIGINT,
+    -- Source placeholder row (zero volume, flat at the previous close), typically
+    -- an exchange holiday. Kept, never deleted; analytics exclude flagged rows.
+    is_stale_quote  BOOLEAN NOT NULL DEFAULT FALSE,
     source_id     INTEGER NOT NULL REFERENCES core.data_sources (source_id),
     retrieved_at  TIMESTAMPTZ NOT NULL,
     CONSTRAINT market_prices_company_date_key UNIQUE (company_id, date)
+);
+
+-- FX rates used to convert foreign-currency statements. rate = INR per 1 unit.
+CREATE TABLE IF NOT EXISTS core.fx_rates (
+    currency      TEXT NOT NULL,
+    date          DATE NOT NULL,
+    rate          NUMERIC(20, 6) NOT NULL CHECK (rate > 0),
+    source_id     INTEGER NOT NULL REFERENCES core.data_sources (source_id),
+    retrieved_at  TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (currency, date)
 );
 
 -- ---------------------------------------------------------------------------
@@ -159,6 +172,10 @@ CREATE TABLE IF NOT EXISTS core.financial_statements (
                          ('unavailable_from_source', 'not_applicable', 'failed_retrieval')),
     currency         TEXT NOT NULL DEFAULT 'INR',
     unit             TEXT NOT NULL,             -- INR | INR_per_share | shares
+    -- Currency the source reported in. When it is not INR, value was converted
+    -- at fx_rate (period average for flows, period-end for balances).
+    original_currency  TEXT NOT NULL DEFAULT 'INR',
+    fx_rate          NUMERIC(20, 6),
     is_calculated    BOOLEAN NOT NULL DEFAULT FALSE,
     formula_id       TEXT REFERENCES core.formulas (formula_id),
     source_id        INTEGER NOT NULL REFERENCES core.data_sources (source_id),
@@ -241,10 +258,32 @@ CREATE TABLE IF NOT EXISTS staging.market_prices (
     close         NUMERIC(20, 6),
     adj_close     NUMERIC(20, 6),
     volume        BIGINT,
+    is_stale_quote  BOOLEAN NOT NULL DEFAULT FALSE,
     source        TEXT NOT NULL,
     retrieved_at  TIMESTAMPTZ NOT NULL,
     raw_file      TEXT,
     PRIMARY KEY (ticker, date)
+);
+
+CREATE TABLE IF NOT EXISTS staging.fx_rates (
+    currency      TEXT NOT NULL,
+    date          DATE NOT NULL,
+    rate          NUMERIC(20, 6) NOT NULL,
+    source        TEXT NOT NULL,
+    retrieved_at  TIMESTAMPTZ NOT NULL,
+    raw_file      TEXT,
+    PRIMARY KEY (currency, date)
+);
+
+CREATE TABLE IF NOT EXISTS staging.source_reported_metrics (
+    ticker        TEXT NOT NULL,
+    metric_name   TEXT NOT NULL,
+    value         DOUBLE PRECISION,
+    as_of_date    DATE NOT NULL,
+    source        TEXT NOT NULL,
+    retrieved_at  TIMESTAMPTZ NOT NULL,
+    raw_file      TEXT,
+    PRIMARY KEY (ticker, metric_name)
 );
 
 CREATE TABLE IF NOT EXISTS staging.financial_statements (
@@ -260,7 +299,10 @@ CREATE TABLE IF NOT EXISTS staging.financial_statements (
     missing_reason   TEXT,
     currency         TEXT NOT NULL,
     unit             TEXT NOT NULL,
-    original_unit    TEXT,
+    original_unit    TEXT,                      -- unit as reported, e.g. USD or USD_per_share
+    original_currency  TEXT NOT NULL DEFAULT 'INR',
+    original_value   NUMERIC(28, 6),            -- value as reported, before FX conversion
+    fx_rate          NUMERIC(20, 6),
     is_calculated    BOOLEAN NOT NULL DEFAULT FALSE,
     formula_id       TEXT,
     source           TEXT NOT NULL,

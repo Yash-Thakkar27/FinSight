@@ -197,6 +197,8 @@ class TinyUniverse:
     tickers = ["GOOD.NS", "BAD.NS", "ALSOGOOD.NS"]
     price_history_years = 5
 
+    fx = {}
+
     class benchmark:
         ticker = "^IDX"
 

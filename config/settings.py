@@ -67,6 +67,24 @@ class Company(BaseModel):
     industry: str
     peer_group: str
     sector_type: SectorType
+    statement_currency: str = "INR"
+
+
+class FxSource(BaseModel):
+    ticker: str
+    history_years: int = 10
+
+
+class ValidationThresholds(BaseModel):
+    """Thresholds used by src/validation/checks.py (Section 8 of the spec)."""
+
+    balance_tolerance: float = 0.02          # |assets - (liabilities + equity)| / assets
+    max_abs_daily_return: float = 0.20       # flag larger moves for review
+    max_gap_weekdays: int = 5                # flag gaps of more than 5 missing weekdays
+    freshness_max_lag_days: int = 5          # latest price vs last weekday, calendar days
+    completeness_warn_below: float = 0.80    # share of applicable fields present
+    margin_bounds: tuple[float, float] = (-1.0, 1.0)
+    eps_scale_bounds: tuple[float, float] = (0.2, 5.0)   # statement EPS / source trailing EPS
 
 
 class Benchmark(BaseModel):
@@ -98,6 +116,8 @@ class Universe(BaseModel):
     risk_free_rate: RiskFreeRate
     trading_days_per_year: int = 252
     price_history_years: int = 5
+    fx: dict[str, FxSource] = Field(default_factory=dict)
+    validation: ValidationThresholds = Field(default_factory=ValidationThresholds)
     companies: list[Company]
 
     @model_validator(mode="after")
@@ -107,6 +127,17 @@ class Universe(BaseModel):
         if duplicates:
             raise ValueError(f"duplicate tickers in universe.yaml: {sorted(duplicates)}")
         return self
+
+    @model_validator(mode="after")
+    def _foreign_currencies_have_fx(self):
+        needed = {c.statement_currency for c in self.companies} - {"INR"}
+        missing = needed - set(self.fx)
+        if missing:
+            raise ValueError(f"no fx source configured for statement currencies: {sorted(missing)}")
+        return self
+
+    def company(self, ticker: str) -> Company:
+        return next(c for c in self.companies if c.ticker == ticker)
 
     @property
     def tickers(self) -> list[str]:

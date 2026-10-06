@@ -46,3 +46,28 @@ None.
 | B8 | The whole `Ticker.info` dict is saved, not only the fields FinSight uses. | "Save every response unchanged". The used fields are listed in `config/field_map.yaml`. |
 | B9 | Retry policy: 4 attempts, waits of 2s, 4s, 8s; at least 30s when the source signals rate limiting; 0.4s pause between requests. Configurable with `INGEST_*` in `.env`. | Conservative defaults for a free, rate-limited source. |
 | B10 | A run manifest (`data/raw/_manifests/{run}.json`) records every dataset's outcome, including `empty` and `failed`. | Lets cleaning tell "source has no data" from "retrieval failed" without re-fetching. |
+
+## Phase 3 (cleaning, validation, load)
+
+Rules are described in full in `methodology.md`. The choices below are the ones that involved judgement.
+
+| # | Assumption | Reason |
+|---|---|---|
+| C1 | **Infosys statements are converted from USD to INR** by FinSight: flows at the period-average USD/INR rate, balances at the period-end rate. | The spec requires INR storage. Yahoo serves Infosys in USD (FY2026 revenue 2.016e10, EPS 0.80). Average-for-flows and closing-for-stocks is the standard translation convention. **Raised with the project owner at the Phase 3 review.** |
+| C2 | Statement currency is set per company in `config/universe.yaml`, not read from Yahoo's `financialCurrency`. | That flag is USD for HCLTech, whose statements are in INR (FY2026 revenue 1.301e12, EPS 61.36). Trusting it would have multiplied HCLTech's figures by about 88. The `statement_currency_scale` check guards the setting. |
+| C3 | USD/INR comes from Yahoo `INR=X` via yfinance, 10 years of daily closes, stored in `core.fx_rates`. | Same documented source as everything else; 10 years so every fiscal period has a full-period average. |
+| C4 | A converted value needs FX quotes within 7 days of both ends of its period (flows) or of the period end (balances); otherwise it is NULL plus an error. | A partial-period average would silently misstate the figure. |
+| C5 | Fields outside a sector type's `applies_to` list are NULL (`not_applicable`) even when the source returns a number. | Yahoo computes a "Net Interest Income" for non-financials and similar items; storing them would invite meaningless bank-style ratios. |
+| C6 | Prices use the latest snapshot only; statements combine all snapshots with the latest retrieval winning. | Adjusted close is re-based by the source after corporate actions, so price snapshots cannot be mixed. Statement values are not re-based, and combining snapshots keeps periods the source later drops. |
+| C7 | An incomplete price row is repaired from an earlier snapshot only if both snapshots agree on adjusted close for the previous shared date; otherwise it is rejected and not loaded. | Keeps the adjusted series on one basis. Prevents a transient source glitch from overwriting a good close with NULL (this happened on 2026-10-07 before the rule existed). |
+| C8 | `core.market_prices` mirrors the cleaned rows within the latest snapshot's date range (rows no longer present are removed); older history is left alone. | Makes the database a pure function of the raw files. This is the only place rows are removed from core, and only rows the cleaning step rejected or the source withdrew. |
+| C9 | Placeholder price rows (zero volume, flat at the previous close) are kept and flagged `is_stale_quote`; return and risk calculations will exclude them. | 116 such rows exist; 6 of TCS's 7 fall on dates that are not Nifty trading days (exchange holidays). Each would add an artificial zero return and understate volatility. |
+| C10 | Price gaps are measured in missing weekdays (Mon–Fri) between consecutive rows, without an exchange holiday calendar. | No holiday calendar is ingested. Holiday clusters do not exceed the 5-weekday threshold. |
+| C11 | Freshness compares the latest price with the last weekday on or before the run date, allowing 5 calendar days. | Covers a weekend plus a holiday without false alarms. Running `--skip-fetch` on old snapshots therefore warns that the data is stale, which is intended. |
+| C12 | Completeness counts only applicable fields and warns below 80% per company and period. | A bank should not be penalised for having no gross profit. 80% was fixed before looking at the results. |
+| C13 | The balance-sheet identity uses equity **including** minority interest. | The source's "Total Liabilities Net Minority Interest" excludes it, so assets = liabilities + equity only holds with it added back. |
+| C14 | "Invalid record" means a record with an error-severity failure. Warnings do not make a record invalid. | Warnings (low completeness, a large move) are prompts for review, not wrong data. The pass rate would otherwise mix the two. |
+| C15 | Period columns that the source returns entirely empty are skipped rather than stored as all-NULL rows. | They carry no information (typically the oldest of 5 annual columns). |
+| C16 | `--tickers` limits the fetch only. Cleaning, validation and loading always cover the whole universe. | Keeps staging a complete picture and the quality summary comparable between runs. |
+| C17 | Integration tests use a separate `finsight_test` database in the same PostgreSQL container, created on first use. | Tests the real upsert SQL (PostgreSQL-specific) without touching project data. They skip if PostgreSQL is unreachable. |
+| C18 | Three more tables beyond the spec minimum: `core.fx_rates`, `staging.fx_rates`, `staging.source_reported_metrics`; and columns `is_stale_quote`, `original_currency`, `fx_rate`. | Needed for C1, C9 and for auditing every converted figure back to its reported value. |

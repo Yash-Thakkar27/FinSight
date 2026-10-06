@@ -1,6 +1,9 @@
 # FinSight company universe. This file is the only place the universe is defined.
 # sector_type: non_financial | bank | nbfc | insurance
 # peer_group: comps are drawn from the same peer_group by default.
+# statement_currency (optional, default INR): currency the source reports statements in.
+#   Set explicitly per company: Yahoo's financialCurrency flag is not reliable (HCLTECH.NS
+#   is flagged USD but its statements are in INR). A validation check guards the choice.
 
 benchmark:
   ticker: "^NSEI"
@@ -19,6 +22,14 @@ risk_free_rate:
 trading_days_per_year: 252
 price_history_years: 5
 
+# FX series used to convert statements reported in a foreign currency into INR.
+# rate = INR per 1 unit of the currency. A longer history than prices is kept so
+# every fiscal period in the statements has a full-period average available.
+fx:
+  USD:
+    ticker: "INR=X"        # Yahoo USD/INR
+    history_years: 10
+
 companies:
   # Information Technology
   - ticker: TCS.NS
@@ -33,6 +44,9 @@ companies:
     industry: IT Services
     peer_group: it_services
     sector_type: non_financial
+    # Yahoo serves Infosys statements in USD (FY2026 revenue 2.016e10, EPS 0.80).
+    # Verified 2026-10-07 against the raw snapshot; see docs/limitations.md.
+    statement_currency: USD
   - ticker: HCLTECH.NS
     name: HCL Technologies
     sector: Information Technology
