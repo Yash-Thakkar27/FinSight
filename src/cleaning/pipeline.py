@@ -15,9 +15,12 @@ files always produce the same output. Conventions (also in docs/methodology.md):
         not_applicable           field is not meaningful for the sector type
         failed_retrieval         the dataset could not be fetched
         unavailable_from_source  the source simply does not have it
-  * Money is absolute INR. Foreign-currency statements are converted:
-    income-statement and cash-flow items at the period-average rate, balance-sheet
-    items at the period-end rate. The original value and rate are kept.
+  * Money is absolute INR in `value`. `original_value` holds the figure exactly
+    as reported, in the reporting currency, and is never overwritten. For a
+    foreign-currency reporter `value` is a translation: income-statement and
+    cash-flow items at the period-average rate, balance-sheet items at the
+    period-end rate, with the rate, its type and its source stored alongside.
+    Ratios, margins and growth are later computed from original_value.
   * Signs: capex is a positive outflow; debt is positive.
   * Nothing is deleted for being unusual. Placeholder price rows are flagged.
 """
@@ -52,8 +55,8 @@ PRICE_COLUMNS = ["ticker", "date", "open", "high", "low", "close", "adj_close", 
 STATEMENT_COLUMNS = [
     "ticker", "statement", "fiscal_year", "fiscal_quarter", "period_end_date", "period_type",
     "line_item", "source_label", "value", "missing_reason", "currency", "unit",
-    "original_unit", "original_currency", "original_value", "fx_rate",
-    "is_calculated", "formula_id", "source", "retrieved_at", "raw_file",
+    "original_unit", "original_currency", "original_value", "fx_rate", "fx_rate_type",
+    "fx_source", "is_calculated", "formula_id", "source", "retrieved_at", "raw_file",
 ]
 
 # Fields derived when the source omits them. Registered in core.formulas.
@@ -86,6 +89,7 @@ class CleanedData:
     metadata: pd.DataFrame
     source_metrics: pd.DataFrame
     fx: pd.DataFrame
+    splits: pd.DataFrame
     # Inputs kept for validation: rows before de-duplication.
     prices_before_dedup: pd.DataFrame
     statement_observations: pd.DataFrame
@@ -133,6 +137,29 @@ def map_prices(raw: pd.DataFrame, ticker: str, retrieved_at: str, raw_file: str,
     df["retrieved_at"] = pd.Timestamp(retrieved_at)
     df["raw_file"] = raw_file
     return df.reset_index(drop=True)
+
+
+SPLIT_COLUMNS = ["ticker", "date", "split_ratio", "source", "retrieved_at", "raw_file"]
+
+
+def clean_splits(raw: pd.DataFrame, ticker: str, retrieved_at: str, raw_file: str) -> pd.DataFrame:
+    """Splits and bonus issues from a raw price table: one row per date with a non-zero ratio.
+
+    The source reports them in the "Stock Splits" column of the price history
+    (2.0 for a 2-for-1 split or a 1:1 bonus), so coverage is the price window.
+    """
+    if "Stock Splits" not in raw.columns:
+        return pd.DataFrame(columns=SPLIT_COLUMNS)
+    ratios = raw["Stock Splits"]
+    ratios = ratios[ratios.notna() & (ratios != 0)]
+    return pd.DataFrame({
+        "ticker": ticker,
+        "date": pd.DatetimeIndex(ratios.index).tz_localize(None).date,
+        "split_ratio": ratios.to_numpy(dtype="float64"),
+        "source": SOURCE,
+        "retrieved_at": pd.Timestamp(retrieved_at),
+        "raw_file": raw_file,
+    }, columns=SPLIT_COLUMNS)
 
 
 def deduplicate(df: pd.DataFrame, key: list[str]) -> tuple[pd.DataFrame, int]:
@@ -331,6 +358,8 @@ def build_statement_grid(company: Company, observations: pd.DataFrame, field_map
                         "original_currency": company.statement_currency,
                         "original_value": hit.value if hit else None,
                         "fx_rate": None,
+                        "fx_rate_type": None,
+                        "fx_source": None,
                         "is_calculated": False,
                         "formula_id": None,
                         "source": SOURCE,
@@ -342,45 +371,56 @@ def build_statement_grid(company: Company, observations: pd.DataFrame, field_map
     grid["value"] = grid["value"].astype("float64")
     grid["original_value"] = grid["original_value"].astype("float64")
     grid["fx_rate"] = grid["fx_rate"].astype("float64")
+    grid["fx_rate_type"] = grid["fx_rate_type"].astype("object")
+    grid["fx_source"] = grid["fx_source"].astype("object")
     return grid
 
 
-def convert_to_inr(statements: pd.DataFrame, rates: pd.Series, currency: str) -> list[dict]:
-    """Convert a foreign-currency company's monetary rows to INR, in place.
+def translate_to_inr(statements: pd.DataFrame, rates: pd.Series, currency: str,
+                     fx_source: str) -> list[dict]:
+    """Translate a foreign-currency reporter's monetary rows to INR, in place.
 
-    Balance-sheet items use the period-end rate; income-statement and cash-flow
-    items (including per-share amounts) use the period-average rate. Share
-    counts are not money and are left alone. A value whose rate cannot be found
-    becomes NULL (unavailable_from_source) and is reported as an issue.
+    value = original_value * rate. Balance-sheet items use the period-end rate
+    ('period_end'); income-statement and cash-flow items, including per-share
+    amounts, use the period-average rate ('average'). Share counts are not money
+    and are left alone. original_value is never changed. A value whose rate
+    cannot be found gets a NULL `value` (unavailable_from_source) and is
+    reported as an issue; its original_value stays.
     """
     issues = []
-    monetary = statements["value"].notna() & statements["unit"].isin(["INR", "INR_per_share"])
+    monetary = (statements["original_value"].notna()
+                & statements["unit"].isin(["INR", "INR_per_share"]))
     for index, row in statements[monetary].iterrows():
         if row["statement"] == "balance":
-            rate = closing_rate(rates, row["period_end_date"])
+            rate, rate_type = closing_rate(rates, row["period_end_date"]), "period_end"
         else:
             start = period_start(row["period_end_date"], row["period_type"])
-            rate = average_rate(rates, start, row["period_end_date"])
+            rate, rate_type = average_rate(rates, start, row["period_end_date"]), "average"
         if rate is None:
-            statements.loc[index, ["value", "missing_reason"]] = [None, "unavailable_from_source"]
+            statements.loc[index, "value"] = None
+            statements.loc[index, "missing_reason"] = "unavailable_from_source"
             issues.append({
                 "ticker": row["ticker"], "kind": "fx_rate_missing", "severity": "error",
                 "dataset": "financial_statements",
                 "record_key": "|".join(str(row[k]) for k in STATEMENT_KEY),
                 "message": f"no {currency}/INR rate for period ending {row['period_end_date']}; "
-                           "value could not be converted and is stored as NULL",
+                           "the INR value is NULL (the reported value is kept)",
             })
             continue
+        statements.loc[index, "value"] = row["original_value"] * rate
         statements.loc[index, "fx_rate"] = rate
-        statements.loc[index, "value"] = row["value"] * rate
+        statements.loc[index, "fx_rate_type"] = rate_type
+        statements.loc[index, "fx_source"] = fx_source
     return issues
 
 
 def add_derived_fields(statements: pd.DataFrame) -> int:
     """Fill a missing field that is mathematically derivable, in place. Returns rows derived.
 
-    Only fills fields that are applicable (never overrides not_applicable) and
-    only when every input is present. Derived rows are marked is_calculated.
+    Runs before any currency translation, so the arithmetic is in the reporting
+    currency and the result is stored as the row's original_value. Only fills
+    fields that are applicable (never overrides not_applicable) and only when
+    every input is present. Derived rows are marked is_calculated.
     """
     derived = 0
     values = statements.set_index(STATEMENT_KEY)["value"]
@@ -400,6 +440,7 @@ def add_derived_fields(statements: pd.DataFrame) -> int:
                 continue
             total = sum(v * sign for v, (_, _, sign) in zip(inputs, formula["inputs"]))
             statements.loc[index, "value"] = total
+            statements.loc[index, "original_value"] = total
             statements.loc[index, "missing_reason"] = None
             statements.loc[index, "is_calculated"] = True
             statements.loc[index, "formula_id"] = formula["formula_id"]
@@ -409,7 +450,8 @@ def add_derived_fields(statements: pd.DataFrame) -> int:
 
 def clean_company_statements(company: Company, snapshots: dict, field_map: dict,
                              dataset_status: dict, fx_rates: dict,
-                             fallback_retrieved_at: pd.Timestamp):
+                             fallback_retrieved_at: pd.Timestamp,
+                             fx_sources: dict | None = None):
     """All statement rows for one company.
 
     snapshots: {(statement, period_type): [(raw_frame, retrieved_at, raw_file), ...]}
@@ -429,11 +471,13 @@ def clean_company_statements(company: Company, snapshots: dict, field_map: dict,
     latest, removed = deduplicate(observations, STATEMENT_KEY)
     statements = build_statement_grid(company, latest, field_map, dataset_status,
                                       fallback_retrieved_at)
+    # Derive in the reporting currency first, then translate.
+    add_derived_fields(statements)
     issues = []
     if company.statement_currency != "INR":
-        issues = convert_to_inr(statements, fx_rates[company.statement_currency],
-                                company.statement_currency)
-    add_derived_fields(statements)
+        currency = company.statement_currency
+        issues = translate_to_inr(statements, fx_rates[currency], currency,
+                                  (fx_sources or {}).get(currency, "unspecified"))
     statements = statements.sort_values(STATEMENT_KEY, kind="stable").reset_index(drop=True)
     return statements, observations, removed, issues
 
@@ -492,6 +536,8 @@ def run_cleaning(universe: Universe, raw_dir: Path = RAW_DIR,
 
     # FX first: statements need it.
     fx_frames, fx_rates = [], {}
+    fx_sources = {currency: f"{SOURCE} {fx.ticker} daily close"
+                  for currency, fx in universe.fx.items()}
     for currency, fx_source in universe.fx.items():
         path = raw_store.latest_snapshot(SOURCE, FX_DATASET, fx_source.ticker, raw_dir)
         if path is None:
@@ -513,7 +559,7 @@ def run_cleaning(universe: Universe, raw_dir: Path = RAW_DIR,
 
     # Prices: companies and the benchmark.
     column_map = field_map["market_prices"]
-    mapped_frames, kept_frames, rejected_frames = [], [], []
+    mapped_frames, kept_frames, rejected_frames, split_frames = [], [], [], []
     for ticker in universe.tickers + [universe.benchmark.ticker]:
         paths = raw_store.list_snapshots(SOURCE, PRICE_DATASET, ticker, raw_dir)
         if not paths:
@@ -529,6 +575,10 @@ def run_cleaning(universe: Universe, raw_dir: Path = RAW_DIR,
 
         latest = mapped_snapshot(paths[-1])
         mapped_frames.append(latest)
+        if ticker != universe.benchmark.ticker:
+            split_frames.append(clean_splits(raw_store.read_frame(paths[-1]), ticker,
+                                             raw_store.read_meta(paths[-1]).retrieved_at,
+                                             _relative(paths[-1], raw_dir)))
         if latest[REQUIRED_PRICE_FIELDS].isna().any(axis=1).any():
             earlier = [mapped_snapshot(p) for p in reversed(paths[:-1])]
             latest, repaired, rejected = repair_incomplete_rows(latest, earlier)
@@ -586,7 +636,7 @@ def run_cleaning(universe: Universe, raw_dir: Path = RAW_DIR,
                     for p in paths
                 ]
         statements, observations, removed, company_issues = clean_company_statements(
-            company, snapshots, field_map, dataset_status, fx_rates, fallback
+            company, snapshots, field_map, dataset_status, fx_rates, fallback, fx_sources
         )
         statement_frames.append(statements)
         observation_frames.append(observations)
@@ -599,6 +649,8 @@ def run_cleaning(universe: Universe, raw_dir: Path = RAW_DIR,
         metadata=pd.DataFrame(metadata_rows),
         source_metrics=pd.DataFrame(metric_rows),
         fx=fx,
+        splits=(pd.concat(split_frames, ignore_index=True) if split_frames
+                else pd.DataFrame(columns=SPLIT_COLUMNS)),
         prices_before_dedup=prices_before_dedup,
         statement_observations=pd.concat(observation_frames, ignore_index=True),
         rejected_prices=rejected_prices,
@@ -615,6 +667,7 @@ def run_cleaning(universe: Universe, raw_dir: Path = RAW_DIR,
             processed_dir / "source_reported_metrics.parquet", index=False
         )
         cleaned.fx.to_parquet(processed_dir / "fx_rates.parquet", index=False)
+        cleaned.splits.to_parquet(processed_dir / "stock_splits.parquet", index=False)
 
     statements = cleaned.statements
     log.info("Cleaned %s price rows for %d tickers (%d placeholder rows flagged)",
@@ -628,6 +681,8 @@ def run_cleaning(universe: Universe, raw_dir: Path = RAW_DIR,
              f"{int((statements['missing_reason'] == 'unavailable_from_source').sum()):,}",
              f"{int((statements['missing_reason'] == 'failed_retrieval').sum()):,}",
              int(statements["is_calculated"].sum()))
+    log.info("Splits and bonus issues in the price window: %d across %d companies",
+             len(cleaned.splits), cleaned.splits["ticker"].nunique())
     log.info("Duplicates removed: %d (keeping the latest retrieval)", cleaned.duplicates_removed)
     repaired_rows = sum(1 for i in issues if i["kind"] == "price_row_repaired")
     if repaired_rows or len(rejected_prices):

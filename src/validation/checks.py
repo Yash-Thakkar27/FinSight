@@ -152,9 +152,14 @@ def check_stale_quotes(prices: pd.DataFrame) -> list[CheckResult]:
 # --------------------------------------------------------------------------
 
 def pivot_statements(statements: pd.DataFrame) -> pd.DataFrame:
-    """Wide view: one row per (ticker, period_type, period_end_date), one column per line item."""
-    wide = statements.pivot_table(index=PERIOD_KEY, columns="line_item", values="value",
-                                  aggfunc="first", dropna=False)
+    """Wide view: one row per (ticker, period_type, period_end_date), one column per line item.
+
+    Only periods a company actually has: unstack does not cross the keys the
+    way a multi-key pivot_table does.
+    """
+    keys = PERIOD_KEY + ["line_item"]
+    wide = (statements.drop_duplicates(subset=keys, keep="last").set_index(keys)["value"]
+            .astype("float64").unstack("line_item"))
     wide.columns.name = None
     return wide.reset_index()
 
@@ -260,6 +265,36 @@ def check_statement_currency_scale(statements: pd.DataFrame, source_metrics: pd.
         message=lambda r: f"annual EPS {r['value']:.2f} vs source trailing EPS "
                           f"{r['value_source']:.2f} (ratio {r['ratio']:.3g}): statement currency "
                           f"or scale looks wrong (configured: {r['original_currency']})",
+    )
+
+
+def check_eps_share_basis(statements: pd.DataFrame, tolerance: float = 0.25) -> list[CheckResult]:
+    """Reported diluted EPS agrees with net income / period-end shares, within tolerance.
+
+    The source's period-end share counts are split-adjusted, but its EPS history
+    is not always restated after a split or bonus issue. A large gap means the
+    reported EPS is on an older share basis and must not be compared across
+    years. FinSight's EPS growth uses net income / shares for this reason.
+    Compared in the reporting currency.
+    """
+    reported = statements.assign(value=statements["original_value"])
+    wide = pivot_statements(reported)
+    needed = ["eps_diluted", "net_income", "shares_outstanding"]
+    if not set(needed) <= set(wide.columns):
+        return []
+    wide = wide.dropna(subset=needed)
+    wide = wide[(wide["shares_outstanding"] > 0) & (wide["period_type"] == "annual")]
+    implied = wide["net_income"] / wide["shares_outstanding"]
+    wide = wide.assign(implied_eps=implied)
+    wide = wide[wide["implied_eps"] != 0]
+    gap = (wide["eps_diluted"] / wide["implied_eps"] - 1).abs()
+    return _results(
+        wide.assign(gap=gap), gap > tolerance, check_name="eps_share_basis",
+        category="consistency", severity="warning", dataset=STATEMENT_DATASET,
+        key=lambda r: period_record_key(r, "eps_diluted"),
+        message=lambda r: f"Potential data anomaly detected: reported EPS {r['eps_diluted']:.2f} "
+                          f"vs net income / period-end shares {r['implied_eps']:.2f} "
+                          f"({r['gap']:.0%} apart); EPS may be on a pre-split share basis",
     )
 
 
@@ -398,6 +433,7 @@ def run_all_checks(cleaned, thresholds: ValidationThresholds, as_of: date) -> li
     results += check_margins_in_range(statements, thresholds.margin_bounds)
     results += check_statement_currency_scale(statements, cleaned.source_metrics,
                                               thresholds.eps_scale_bounds)
+    results += check_eps_share_basis(statements)
     results += check_completeness(statements, thresholds.completeness_warn_below)
     results += check_no_conflicting_values(cleaned.statement_observations)
     results += check_freshness(prices, as_of, thresholds.freshness_max_lag_days)

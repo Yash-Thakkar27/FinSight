@@ -5,7 +5,7 @@
     3 clean            src/cleaning
     4 validate         src/validation
     5 upsert           src/database/load (staging -> core)
-    6 recompute metrics   (Phase 4)
+    6 recompute metrics   src/analytics
     7 regenerate exports  (Phase 8)
     8 write the pipeline_runs row
 
@@ -21,6 +21,8 @@ from pathlib import Path
 from sqlalchemy import Engine
 
 from config.settings import PROCESSED_DIR, RAW_DIR, Universe
+from src.analytics.compute import recompute_metrics
+from src.analytics.peer_analytics import recompute_peer_analytics
 from src.cleaning.pipeline import run_cleaning
 from src.database import load
 from src.database.setup import table_counts
@@ -62,7 +64,7 @@ def run_pipeline(universe: Universe, engine: Engine, *, tickers: list[str] | Non
         report = checks.format_report(check_results, summary, cleaned)
         log.info("Step 4 (validate): %d check results in %.1fs",
                  len(check_results), time.perf_counter() - start)
-        log.info("Validation: %.1f%% of records passed", summary["pass_rate_pct"])
+        log.info("Validation: %.2f%% of records passed", summary["pass_rate_pct"])
 
         # Step 5: one transaction, so the database never holds half a run
         start = time.perf_counter()
@@ -82,7 +84,25 @@ def run_pipeline(universe: Universe, engine: Engine, *, tickers: list[str] | Non
             log.info("Upserted %s rows into %s", f"{rows:,}", name)
         log.info("Step 5 (upsert to PostgreSQL): %.1fs", time.perf_counter() - start)
 
-        log.info("Step 6 (recompute metrics): not implemented yet (Phase 4)")
+        # Step 6: metrics are rebuilt in full from the core tables
+        start = time.perf_counter()
+        with engine.begin() as conn:
+            metric_counts = recompute_metrics(conn, universe)
+            peer_counts = recompute_peer_analytics(conn, universe)
+            counts = table_counts(conn)
+        log.info("Computed %s metric rows (%s with a value, %s N/A) from %d registered formulas",
+                 f"{metric_counts['metrics']:,}", f"{metric_counts['with_value']:,}",
+                 f"{metric_counts['not_available']:,}", metric_counts["formulas"])
+        log.info("Valuation reconciliation: %d figures compared with the source, %d flagged",
+                 metric_counts["reconciled"], metric_counts["flagged"])
+        log.info("Peer comparisons: %d rows, %d with a generated interpretation",
+                 peer_counts["comparisons"], peer_counts["interpretations"])
+        log.info("Potential data anomalies flagged: %d (%s)", peer_counts["anomalies"],
+                 ", ".join(f"{dataset} {method}: {n}" for (dataset, method), n
+                           in sorted(peer_counts["anomalies_by_dataset"].items())))
+        log.info("Correlations: %d pairs stored for windows %s", peer_counts["correlations"],
+                 ", ".join(peer_counts["correlation_windows"]))
+        log.info("Step 6 (recompute metrics): %.1fs", time.perf_counter() - start)
         log.info("Step 7 (regenerate exports): not implemented yet (Phase 8)")
 
         # Step 8
@@ -93,7 +113,8 @@ def run_pipeline(universe: Universe, engine: Engine, *, tickers: list[str] | Non
         load.finish_run(engine, run_id, status, summary["total_records"], notes)
         log.info("Step 8 (pipeline_runs): run %d finished with status '%s'", run_id, status)
         return {"run_id": run_id, "status": status, "summary": summary, "report": report,
-                "table_counts": counts, "failed_datasets": failed_datasets}
+                "table_counts": counts, "failed_datasets": failed_datasets,
+                "metric_counts": metric_counts, "peer_counts": peer_counts}
     except Exception as exc:
         log.exception("Pipeline run %d failed", run_id)
         load.finish_run(engine, run_id, "failed", None, f"{type(exc).__name__}: {exc}"[:500])

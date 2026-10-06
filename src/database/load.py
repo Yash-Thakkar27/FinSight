@@ -21,6 +21,7 @@ STAGING_TABLES = {
     "metadata": models.StagingCompanyMetadata,
     "source_metrics": models.StagingSourceReportedMetric,
     "fx": models.StagingFxRate,
+    "splits": models.StagingStockSplit,
 }
 
 
@@ -132,6 +133,17 @@ UPSERTS = {
             source_id = EXCLUDED.source_id,
             retrieved_at = EXCLUDED.retrieved_at
     """,
+    "core.stock_splits": """
+        INSERT INTO core.stock_splits (company_id, date, split_ratio, source_id, retrieved_at)
+        SELECT c.company_id, s.date, s.split_ratio, ds.source_id, s.retrieved_at
+        FROM staging.stock_splits s
+        JOIN core.companies c ON c.ticker = s.ticker
+        JOIN core.data_sources ds ON ds.name = s.source
+        ON CONFLICT (company_id, date) DO UPDATE SET
+            split_ratio = EXCLUDED.split_ratio,
+            source_id = EXCLUDED.source_id,
+            retrieved_at = EXCLUDED.retrieved_at
+    """,
     "core.fx_rates": """
         INSERT INTO core.fx_rates (currency, date, rate, source_id, retrieved_at)
         SELECT s.currency, s.date, s.rate, ds.source_id, s.retrieved_at
@@ -160,12 +172,13 @@ UPSERTS = {
     "core.financial_statements": """
         INSERT INTO core.financial_statements
             (company_id, statement, fiscal_year, fiscal_quarter, period_end_date, period_type,
-             line_item, value, missing_reason, currency, unit, original_currency, fx_rate,
+             line_item, value, missing_reason, currency, unit, original_currency,
+             original_value, fx_rate, fx_rate_type, fx_source,
              is_calculated, formula_id, source_id, retrieved_at)
         SELECT c.company_id, s.statement, s.fiscal_year, s.fiscal_quarter, s.period_end_date,
                s.period_type, s.line_item, s.value, s.missing_reason, s.currency, s.unit,
-               s.original_currency, s.fx_rate, s.is_calculated, s.formula_id, ds.source_id,
-               s.retrieved_at
+               s.original_currency, s.original_value, s.fx_rate, s.fx_rate_type, s.fx_source,
+               s.is_calculated, s.formula_id, ds.source_id, s.retrieved_at
         FROM staging.financial_statements s
         JOIN core.companies c ON c.ticker = s.ticker
         JOIN core.data_sources ds ON ds.name = s.source
@@ -174,7 +187,9 @@ UPSERTS = {
             fiscal_year = EXCLUDED.fiscal_year, fiscal_quarter = EXCLUDED.fiscal_quarter,
             value = EXCLUDED.value, missing_reason = EXCLUDED.missing_reason,
             currency = EXCLUDED.currency, unit = EXCLUDED.unit,
-            original_currency = EXCLUDED.original_currency, fx_rate = EXCLUDED.fx_rate,
+            original_currency = EXCLUDED.original_currency,
+            original_value = EXCLUDED.original_value, fx_rate = EXCLUDED.fx_rate,
+            fx_rate_type = EXCLUDED.fx_rate_type, fx_source = EXCLUDED.fx_source,
             is_calculated = EXCLUDED.is_calculated, formula_id = EXCLUDED.formula_id,
             source_id = EXCLUDED.source_id, retrieved_at = EXCLUDED.retrieved_at
     """,
