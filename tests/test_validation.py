@@ -28,10 +28,11 @@ def statements(rows, ticker="AAA.NS", period_end="2026-03-31", period_type="annu
             reason = "unavailable_from_source"
         records.append({"ticker": ticker, "statement": "x", "line_item": line_item,
                         "period_end_date": date.fromisoformat(period_end),
-                        "period_type": period_type, "value": value, "missing_reason": reason,
-                        "original_currency": "INR"})
+                        "period_type": period_type, "value": value, "original_value": value,
+                        "missing_reason": reason, "original_currency": "INR"})
     frame = pd.DataFrame(records)
     frame["value"] = frame["value"].astype("float64")
+    frame["original_value"] = frame["original_value"].astype("float64")
     return frame
 
 
@@ -163,6 +164,22 @@ def test_statement_currency_scale_catches_wrong_currency():
     assert {r.ticker: r.status for r in results} == \
         {"RIGHT.NS": "pass", "USD.NS": "fail", "TWICE.NS": "fail"}
     assert all(r.severity == "error" for r in failures(results))
+
+
+def test_eps_on_a_pre_split_share_basis_is_flagged():
+    table = pd.concat([
+        # 440 / 10 shares = 44.0 vs reported 45.0: 2% apart (dilution), fine
+        statements({"eps_diluted": 45.0, "net_income": 440.0, "shares_outstanding": 10.0},
+                   ticker="OK.NS"),
+        # 444 / 10 = 44.4 vs reported 88.7: EPS still on the share count before a 1:1 bonus
+        statements({"eps_diluted": 88.7, "net_income": 444.0, "shares_outstanding": 10.0},
+                   ticker="BONUS.NS"),
+    ], ignore_index=True)
+    results = checks.check_eps_share_basis(table)
+    assert {r.ticker: r.status for r in results} == {"OK.NS": "pass", "BONUS.NS": "fail"}
+    flagged = failures(results)[0]
+    assert flagged.severity == "warning"
+    assert flagged.message.startswith("Potential data anomaly detected")
 
 
 # --- completeness, consistency, freshness -------------------------------------

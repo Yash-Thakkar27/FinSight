@@ -33,9 +33,13 @@ def value_of(statements, line_item, period_end="2026-03-31", column="value"):
     return row.iloc[0][column]
 
 
+FX_SOURCE = "yfinance INR=X daily close"
+
+
 def clean(co, snapshots, status=None, fx=None):
     return pipeline.clean_company_statements(
-        co, snapshots, FIELD_MAP, status or {}, fx or {}, pd.Timestamp(RETRIEVED)
+        co, snapshots, FIELD_MAP, status or {}, fx or {}, pd.Timestamp(RETRIEVED),
+        {"USD": FX_SOURCE},
     )
 
 
@@ -91,6 +95,17 @@ def test_duplicate_prices_keep_latest_retrieval():
     assert removed == 1
     assert len(cleaned) == 2
     assert cleaned.loc[cleaned["date"] == date(2026, 10, 6), "close"].item() == 102.0
+
+
+def test_splits_are_read_from_the_price_history():
+    raw = raw_prices(["2025-08-25", "2025-08-26", "2025-08-27"], [1900.0, 950.0, 955.0],
+                     [10, 10, 10])
+    raw["Stock Splits"] = [0.0, 2.0, 0.0]         # 1:1 bonus effective 26 August
+    splits = pipeline.clean_splits(raw, "AAA.NS", RETRIEVED, "f.parquet")
+    assert splits[["ticker", "date", "split_ratio"]].values.tolist() == \
+        [["AAA.NS", date(2025, 8, 26), 2.0]]
+    no_splits = pipeline.clean_splits(raw.assign(**{"Stock Splits": 0.0}), "AAA.NS", RETRIEVED, "f")
+    assert no_splits.empty and list(no_splits.columns) == pipeline.SPLIT_COLUMNS
 
 
 def test_stale_quote_flag():
@@ -235,6 +250,7 @@ def test_derived_fields():
 
     # FCF = OCF - capex = 500 - 120 = 380 (capex is a positive outflow after cleaning)
     assert value_of(statements, "free_cash_flow") == 380.0
+    assert value_of(statements, "free_cash_flow", column="original_value") == 380.0
     assert bool(value_of(statements, "free_cash_flow", column="is_calculated"))
     assert value_of(statements, "free_cash_flow", column="formula_id") == "DERIVED_FCF"
     assert pd.isna(value_of(statements, "free_cash_flow", column="missing_reason"))
@@ -271,35 +287,96 @@ def test_fx_rates():
     assert pipeline.average_rate(rates, date(2025, 4, 1), date(2026, 3, 31)) is None
 
 
-def test_usd_statements_are_converted_to_inr():
+def usd_quarter_snapshots():
     periods = ("2025-06-30",)
-    snapshots = {
-        ("income", "quarterly"): [(raw_statement({"Total Revenue": [100.0], "Diluted EPS": [2.0]},
-                                                 periods), RETRIEVED, "f")],
-        ("balance", "quarterly"): [(raw_statement({"Total Assets": [50.0],
-                                                   "Ordinary Shares Number": [1000.0]},
-                                                  periods), RETRIEVED, "f")],
-        ("cashflow", "quarterly"): [(raw_statement({"Capital Expenditure": [-10.0]},
-                                                   periods), RETRIEVED, "f")],
+    return {
+        ("income", "quarterly"): [(raw_statement(
+            {"Total Revenue": [100.0], "Net Income": [20.0], "Gross Profit": [40.0],
+             "Diluted EPS": [2.0], "EBIT": [25.0], "Reconciled Depreciation": [5.0]},
+            periods), RETRIEVED, "f")],
+        ("balance", "quarterly"): [(raw_statement(
+            {"Total Assets": [50.0], "Ordinary Shares Number": [1000.0]}, periods),
+            RETRIEVED, "f")],
+        ("cashflow", "quarterly"): [(raw_statement(
+            {"Operating Cash Flow": [30.0], "Capital Expenditure": [-10.0]}, periods),
+            RETRIEVED, "f")],
     }
-    statements, _, _, issues = clean(company(currency="USD"), snapshots, fx={"USD": usd_rates()})
+
+
+def test_flow_item_is_translated_at_the_period_average_rate():
+    statements, _, _, issues = clean(company(currency="USD"), usd_quarter_snapshots(),
+                                     fx={"USD": usd_rates()})
     assert issues == []
-    # flows at the period-average rate (82): revenue 100 -> 8,200; EPS 2 -> 164; capex 10 -> 820
+    # quotes 80, 82, 84 over the quarter: average 82. Revenue 100 USD -> 8,200 INR
     assert value_of(statements, "revenue", "2025-06-30") == pytest.approx(8200.0)
+    assert value_of(statements, "revenue", "2025-06-30", "fx_rate") == pytest.approx(82.0)
+    assert value_of(statements, "revenue", "2025-06-30", "fx_rate_type") == "average"
+    assert value_of(statements, "revenue", "2025-06-30", "fx_source") == FX_SOURCE
+    # per-share flows and cash-flow items use the same average: EPS 2 -> 164; capex 10 -> 820
     assert value_of(statements, "eps_diluted", "2025-06-30") == pytest.approx(164.0)
     assert value_of(statements, "capex", "2025-06-30") == pytest.approx(820.0)
-    assert value_of(statements, "revenue", "2025-06-30", "fx_rate") == pytest.approx(82.0)
-    # balances at the period-end rate (84): assets 50 -> 4,200
+    assert value_of(statements, "capex", "2025-06-30", "fx_rate_type") == "average"
+
+
+def test_balance_item_is_translated_at_the_period_end_rate():
+    statements, _, _, _ = clean(company(currency="USD"), usd_quarter_snapshots(),
+                                fx={"USD": usd_rates()})
+    # closing quote on 30 June is 84. Total assets 50 USD -> 4,200 INR
     assert value_of(statements, "total_assets", "2025-06-30") == pytest.approx(4200.0)
     assert value_of(statements, "total_assets", "2025-06-30", "fx_rate") == pytest.approx(84.0)
-    # the reported figure and unit are kept
-    assert value_of(statements, "revenue", "2025-06-30", "original_value") == 100.0
+    assert value_of(statements, "total_assets", "2025-06-30", "fx_rate_type") == "period_end"
+    # a share count is not money: untouched, no rate recorded
+    assert value_of(statements, "shares_outstanding", "2025-06-30") == 1000.0
+    assert pd.isna(value_of(statements, "shares_outstanding", "2025-06-30", "fx_rate"))
+    assert pd.isna(value_of(statements, "shares_outstanding", "2025-06-30", "fx_rate_type"))
+
+
+def test_reported_usd_values_are_never_overwritten():
+    statements, _, _, _ = clean(company(currency="USD"), usd_quarter_snapshots(),
+                                fx={"USD": usd_rates()})
+    for line_item, reported in (("revenue", 100.0), ("total_assets", 50.0), ("capex", 10.0),
+                                ("eps_diluted", 2.0)):
+        assert value_of(statements, line_item, "2025-06-30", "original_value") == reported
+        assert value_of(statements, line_item, "2025-06-30", "original_currency") == "USD"
     assert value_of(statements, "revenue", "2025-06-30", "original_unit") == "USD"
     assert value_of(statements, "eps_diluted", "2025-06-30", "original_unit") == "USD_per_share"
     assert value_of(statements, "revenue", "2025-06-30", "currency") == "INR"
-    # a share count is not money
-    assert value_of(statements, "shares_outstanding", "2025-06-30") == 1000.0
-    assert pd.isna(value_of(statements, "shares_outstanding", "2025-06-30", "fx_rate"))
+
+
+def test_derived_field_is_computed_in_reporting_currency_then_translated():
+    statements, _, _, _ = clean(company(currency="USD"), usd_quarter_snapshots(),
+                                fx={"USD": usd_rates()})
+    # FCF = 30 - 10 = 20 USD, then translated at the average rate 82 -> 1,640 INR
+    assert value_of(statements, "free_cash_flow", "2025-06-30", "original_value") == 20.0
+    assert value_of(statements, "free_cash_flow", "2025-06-30") == pytest.approx(1640.0)
+    assert bool(value_of(statements, "free_cash_flow", "2025-06-30", "is_calculated"))
+    # EBITDA = 25 + 5 = 30 USD -> 2,460 INR
+    assert value_of(statements, "ebitda", "2025-06-30", "original_value") == 30.0
+    assert value_of(statements, "ebitda", "2025-06-30") == pytest.approx(2460.0)
+
+
+def test_margins_are_identical_before_and_after_translation():
+    statements, _, _, _ = clean(company(currency="USD"), usd_quarter_snapshots(),
+                                fx={"USD": usd_rates()})
+
+    def margin(numerator, column):
+        return (value_of(statements, numerator, "2025-06-30", column)
+                / value_of(statements, "revenue", "2025-06-30", column))
+
+    # both sides of a margin are flows translated at the same average rate, so it cancels
+    assert margin("net_income", "original_value") == pytest.approx(0.20)      # 20 / 100
+    assert margin("net_income", "value") == pytest.approx(margin("net_income", "original_value"))
+    assert margin("gross_profit", "value") == pytest.approx(0.40)             # 40 / 100
+    assert margin("free_cash_flow", "value") == pytest.approx(0.20)           # 20 / 100
+    # a flow over a balance is NOT invariant (82 vs 84), which is why such ratios
+    # are computed from the reported values: 100 / 50 = 2.0, but 8,200 / 4,200 = 1.952
+    turnover_reported = (value_of(statements, "revenue", "2025-06-30", "original_value")
+                         / value_of(statements, "total_assets", "2025-06-30", "original_value"))
+    turnover_translated = (value_of(statements, "revenue", "2025-06-30")
+                           / value_of(statements, "total_assets", "2025-06-30"))
+    assert turnover_reported == 2.0
+    assert turnover_translated == pytest.approx(8200 / 4200)
+    assert turnover_translated != pytest.approx(turnover_reported)
 
 
 def test_missing_fx_rate_gives_null_not_an_unconverted_number():
@@ -308,6 +385,7 @@ def test_missing_fx_rate_gives_null_not_an_unconverted_number():
     statements, _, _, issues = clean(company(currency="USD"), snapshots, fx={"USD": usd_rates()})
     assert pd.isna(value_of(statements, "revenue"))
     assert value_of(statements, "revenue", column="missing_reason") == "unavailable_from_source"
+    assert value_of(statements, "revenue", column="original_value") == 100.0   # reported value kept
     assert len(issues) == 2 and issues[0]["kind"] == "fx_rate_missing"
 
 

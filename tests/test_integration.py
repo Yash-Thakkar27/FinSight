@@ -131,6 +131,7 @@ def statement_row(engine, ticker, line_item, period_end="2026-03-31"):
     with engine.connect() as conn:
         return conn.execute(text("""
             SELECT f.value, f.missing_reason, f.fx_rate, f.original_currency, f.is_calculated,
+                   f.original_value, f.fx_rate_type, f.fx_source,
                    f.formula_id, f.fiscal_year, f.fiscal_quarter
             FROM core.financial_statements f JOIN core.companies c USING (company_id)
             WHERE c.ticker = :ticker AND f.line_item = :item AND f.period_end_date = :end
@@ -163,6 +164,10 @@ def test_pipeline_end_to_end_and_idempotent(engine, raw_dir):
     revenue = statement_row(engine, "USDCO.NS", "revenue")
     assert float(revenue["value"]) == 85000.0 and float(revenue["fx_rate"]) == 85.0
     assert revenue["original_currency"] == "USD"
+    assert float(revenue["original_value"]) == 1000.0        # reported USD value kept
+    assert revenue["fx_rate_type"] == "average"
+    assert revenue["fx_source"] == "yfinance INR=X daily close"
+    assert statement_row(engine, "USDCO.NS", "total_assets")["fx_rate_type"] == "period_end"
     assert float(statement_row(engine, "USDCO.NS", "eps_diluted")["value"]) == 42.5
     assert float(statement_row(engine, "USDCO.NS", "shares_outstanding")["value"]) == 15.0
 
@@ -200,6 +205,138 @@ def test_pipeline_end_to_end_and_idempotent(engine, raw_dir):
             assert second["table_counts"][table] == rows, table
     assert second["table_counts"]["core.pipeline_runs"] == 2
     assert fingerprint() == before
+
+
+def metric_row(engine, ticker, metric_name, period_type="annual", period_end="2026-03-31"):
+    with engine.connect() as conn:
+        return conn.execute(text("""
+            SELECT m.value, m.na_reason, m.method, m.unit, m.formula_id, m.reporting_currency,
+                   m.is_translated, m.input_fields
+            FROM core.metrics m JOIN core.companies c USING (company_id)
+            WHERE c.ticker = :t AND m.metric_name = :m AND m.period_type = :p
+              AND m.period_end_date = :e
+        """), {"t": ticker, "m": metric_name, "p": period_type, "e": period_end}).mappings().one()
+
+
+def test_metrics_are_stored_with_sector_and_currency_rules(engine, raw_dir):
+    outcome = run(engine, raw_dir)
+    assert outcome["metric_counts"]["metrics"] == outcome["table_counts"]["core.metrics"] > 0
+    # every stored metric points at a registered formula
+    assert scalar(engine, """
+        SELECT count(*) FROM core.metrics m LEFT JOIN core.formulas f USING (formula_id)
+        WHERE f.formula_id IS NULL""") == 0
+    # a row has a value or a reason, never neither
+    assert scalar(engine, """
+        SELECT count(*) FROM core.metrics WHERE value IS NULL AND na_reason IS NULL""") == 0
+
+    # INR company: net margin 150 / 1,000 = 15%; revenue growth (1,000 - 900) / 900
+    assert metric_row(engine, "INRCO.NS", "net_margin")["value"] == pytest.approx(0.15)
+    assert metric_row(engine, "INRCO.NS", "revenue_growth")["value"] == pytest.approx(100 / 900)
+    assert metric_row(engine, "INRCO.NS", "gross_margin")["value"] == pytest.approx(0.40)
+    # ROE = 150 / average(equity). The fixture has no shareholders' equity line, so N/A
+    assert metric_row(engine, "INRCO.NS", "roe")["na_reason"] == \
+        "input unavailable: total_equity"
+
+    # EPS: no weighted-average shares in the fixture, so period-end shares: 150 / 15 = 10
+    eps = metric_row(engine, "INRCO.NS", "eps")
+    assert eps["value"] == pytest.approx(10.0) and eps["method"] == "period_end"
+    assert eps["input_fields"]["reported_eps_diluted"] == 10.0
+    # ROA: FY2026 has a prior year-end (average balance); FY2025 is the earliest year
+    assert metric_row(engine, "INRCO.NS", "roa")["method"] == "average_balance"
+    assert metric_row(engine, "INRCO.NS", "roa")["value"] == pytest.approx(150 / 1900)
+    assert metric_row(engine, "INRCO.NS", "roa", period_end="2025-03-31")["method"] == \
+        "closing_balance"
+    # no multiple is ever negative
+    assert scalar(engine, """
+        SELECT count(*) FROM core.metrics
+        WHERE value < 0 AND metric_name IN ('pe_ratio', 'pb_ratio', 'ev_ebitda', 'ev_revenue')
+    """) == 0
+
+    # bank: margins that are not meaningful are NULL with the standard reason
+    for name in ("gross_margin", "ebitda_margin", "debt_to_equity", "current_ratio"):
+        row = metric_row(engine, "BANK.NS", name)
+        assert row["value"] is None and row["na_reason"] == "N/A (not meaningful for banks)"
+    assert metric_row(engine, "BANK.NS", "net_margin")["value"] == pytest.approx(0.15)
+    assert scalar(engine, """
+        SELECT count(*) FROM core.metrics m JOIN core.companies c USING (company_id)
+        JOIN core.formulas f USING (formula_id)
+        WHERE m.value IS NOT NULL AND NOT (c.sector_type = ANY(f.applicable_sector_types))
+          AND c.entity_type = 'company'""") == 0
+
+    # USD reporter: growth and margins in USD, identical to the INR company's by construction
+    growth = metric_row(engine, "USDCO.NS", "revenue_growth")
+    assert growth["value"] == pytest.approx(100 / 900)
+    assert growth["reporting_currency"] == "USD" and growth["is_translated"] is False
+    assert growth["input_fields"]["revenue"] == 1000.0           # the reported USD figure
+    # ... while its valuation is in INR and flagged as translated
+    # market cap at FY end = 106 * 15 shares = 1,590; net income 150 USD * 85 = 12,750 INR
+    pe = metric_row(engine, "USDCO.NS", "pe_ratio")
+    assert pe["value"] == pytest.approx(1590 / 12750)
+    assert pe["is_translated"] is True and pe["reporting_currency"] == "USD"
+    assert metric_row(engine, "INRCO.NS", "pe_ratio")["is_translated"] is False
+
+    # rebuilding metrics gives the same rows
+    def fingerprint():
+        return scalar(engine, """
+            SELECT md5(string_agg(md5(concat_ws('|', company_id, metric_name, period_type,
+                       period_end_date, value, na_reason, input_fields::text)), ''
+                       ORDER BY company_id, metric_name, period_type, period_end_date))
+            FROM core.metrics""")
+
+    before = fingerprint()
+    run(engine, raw_dir)
+    assert fingerprint() == before
+
+
+def test_peer_comparisons_are_stored_and_exclude_the_target(engine, raw_dir):
+    outcome = run(engine, raw_dir)
+    # 3 companies x 15 comps metrics
+    assert outcome["table_counts"]["core.peer_comparisons"] == 45
+    assert outcome["peer_counts"]["comparisons"] == 45
+    # INRCO.NS and USDCO.NS share a peer group, so each has exactly one peer; the bank has none
+    def comparison(ticker, metric_name):
+        with engine.connect() as conn:
+            return conn.execute(text("""
+                SELECT p.n_peers, p.peer_median, p.target_value, p.interpretation, p.peer_tickers,
+                       p.peer_mean, p.percentile_rank, p.position_label
+                FROM core.peer_comparisons p JOIN core.companies c USING (company_id)
+                WHERE c.ticker = :t AND p.metric_name = :m"""),
+                {"t": ticker, "m": metric_name}).mappings().one()
+
+    margin = comparison("INRCO.NS", "net_margin")
+    assert margin["peer_tickers"] == ["USDCO.NS"] and margin["n_peers"] == 1
+    assert margin["peer_median"] == pytest.approx(0.15)      # the peer's value, not the target's
+    # one peer: no mean or percentile, and a rank instead (tied with its peer: 1st of 2)
+    assert margin["peer_mean"] is None and margin["percentile_rank"] is None
+    assert margin["position_label"] == "1st of 2"
+    assert margin["interpretation"] == ("INRCO.NS's net margin of 15.0% is in line with the "
+                                        "peer median of 15.0% (n=1).")
+    # the USD reporter's valuation sentence carries the translation caveat
+    assert "INR figures for USDCO.NS are translated from USD." in \
+        comparison("USDCO.NS", "pe_ratio")["interpretation"]
+    assert "Peer figures for USDCO.NS are translated to INR." in \
+        comparison("INRCO.NS", "pe_ratio")["interpretation"]
+    # no peers: no statistics and no sentence (never a sentence around a missing number)
+    assert scalar(engine, """
+        SELECT count(*) FROM core.peer_comparisons p JOIN core.companies c USING (company_id)
+        WHERE c.ticker = 'BANK.NS' AND (p.n_peers > 0 OR p.interpretation IS NOT NULL)""") == 0
+    # the target never appears in its own peer set
+    assert scalar(engine, """
+        SELECT count(*) FROM core.peer_comparisons p JOIN core.companies c USING (company_id)
+        WHERE c.ticker = ANY(p.peer_tickers)""") == 0
+    # the target's own value is still recorded: net margin 15%
+    assert scalar(engine, """
+        SELECT p.target_value FROM core.peer_comparisons p JOIN core.companies c
+        USING (company_id) WHERE c.ticker = 'INRCO.NS' AND p.metric_name = 'net_margin'
+    """) == pytest.approx(0.15)
+    # 7 price days give 6 aligned returns for 4 tickers: one 'full' window, 4 x 4 pairs
+    assert outcome["table_counts"]["core.correlations"] == 16
+    assert scalar(engine, "SELECT min(n_observations) FROM core.correlations") >= 4
+    assert scalar(engine, """SELECT count(*) FROM core.correlations
+                             WHERE company_id_a = company_id_b AND correlation <> 1""") == 0
+    # every anomaly message, if any, starts with the required wording
+    assert scalar(engine, """SELECT count(*) FROM core.anomalies
+                             WHERE message NOT LIKE 'Potential data anomaly detected%'""") == 0
 
 
 def test_incomplete_latest_price_row_never_overwrites_good_data(engine, raw_dir):
