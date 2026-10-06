@@ -1,0 +1,21 @@
+# FinSight app configuration. Restrained, neutral theme with one accent colour.
+
+[theme]
+base = "light"
+primaryColor = "#1f4e79"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f5f6f8"
+textColor = "#1f2a37"
+font = "sans serif"
+
+[browser]
+# The app makes no outbound calls: usage statistics are switched off.
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+[server]
+# Serve on this machine only. This also stops Streamlit looking up the external IP address
+# at startup, which is an outbound call.
+address = "localhost"
