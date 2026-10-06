@@ -23,8 +23,8 @@ ROW = excel.FIRST_DATA_ROW
 EXPECTED_SHEETS = {
     "financial_summary.xlsx": ["Company Overview", "Financial Ratios", "Growth Analysis",
                                "Valuation"],
-    "comparable_companies.xlsx": ["Peer Set", "Operating Metrics", "Valuation Multiples",
-                                  "Peer Statistics"],
+    "comparable_companies.xlsx": ["Peer Set", "Operating Metrics", "Capital Structure",
+                                  "Valuation Multiples", "Peer Statistics"],
     "market_analysis.xlsx": ["Returns", "Risk", "Correlation"],
 }
 
@@ -175,8 +175,15 @@ def test_missing_values_are_written_as_na_never_zero(workbooks):
     # a metric with no data for anyone is N/A in every row, and nothing is zero-filled
     gross = header.index("Gross margin") + 1
     assert {operating.cell(r, gross).value for r in range(ROW, ROW + 9)} == {"N/A"}
-    values = [operating.cell(r, c).value for r in range(ROW, ROW + 9) for c in range(4, 15)]
+    values = [operating.cell(r, c).value for r in range(ROW, ROW + 9) for c in range(4, 12)]
     assert 0 not in values
+    # capital-structure metrics have their own sheet; the bank is N/A there too
+    capital = book["Capital Structure"]
+    assert [c.value for c in capital[excel.HEADER_ROW]][3:6] == ["Debt/equity",
+                                                                 "Net debt/EBITDA",
+                                                                 "Current ratio"]
+    assert capital.cell(bank_row, 4).value == "N/A"
+    assert capital.cell(ROW, 4).value == 0.10                      # T's debt/equity
 
 
 # ----------------------------------------------------------- calculated values ----
@@ -207,7 +214,7 @@ def expected_statistics(result_row: dict) -> dict:
 def compare_peer_statistics(calculated: Calculated, result: dict) -> list:
     by_metric = {row["metric_name"]: row for row in result["rows"]}
     mismatches = []
-    for offset, name in enumerate(excel.OPERATING + excel.VALUATION):
+    for offset, name in enumerate(excel.STATISTIC_METRICS):
         row = ROW + offset
         for column, expected in expected_statistics(by_metric[name]).items():
             actual = calculated.value("Peer Statistics", f"{column}{row}")
@@ -233,7 +240,7 @@ def test_peer_statistics_formulas_match_the_pipeline(workbooks, data, target):
 def test_peer_statistics_by_hand(workbooks):
     """Target T: EV/EBITDA peers are A 10, B 20, C 30, D 40 (T's own 30 is excluded)."""
     calculated = Calculated(workbooks["comparable_companies.xlsx"])
-    row = ROW + (excel.OPERATING + excel.VALUATION).index("ev_ebitda")
+    row = ROW + (excel.STATISTIC_METRICS).index("ev_ebitda")
 
     def stat(column):
         return calculated.value("Peer Statistics", f"{column}{row}")
@@ -245,20 +252,20 @@ def test_peer_statistics_by_hand(workbooks):
     assert stat("M") == "percentile 63"                     # (2 below + half of 1 equal) / 4
 
     # debt/equity: C has no value, so three peers (0.10, 0.30, 0.20): quartiles and mean hidden
-    row = ROW + (excel.OPERATING + excel.VALUATION).index("debt_to_equity")
+    row = ROW + (excel.STATISTIC_METRICS).index("debt_to_equity")
     assert stat("D") == 3 and stat("G") == pytest.approx(0.20)
     assert (stat("F"), stat("H"), stat("I")) == ("–", "–", "–")
     assert stat("M") == "rank 3 of 4"                       # T at 0.10: B and D are higher
 
     # a percentage metric reports the gap in points: 27% - median(20, 22, 24, 26) = 4 points
-    row = ROW + (excel.OPERATING + excel.VALUATION).index("ebitda_margin")
+    row = ROW + (excel.STATISTIC_METRICS).index("ebitda_margin")
     assert stat("G") == pytest.approx(0.23) and stat("K") == pytest.approx(0.04)
 
 
 def test_changing_the_target_recalculates_everything(workbooks):
     default = Calculated(workbooks["comparable_companies.xlsx"])
     changed = Calculated(workbooks["comparable_companies.xlsx"], {("Peer Set", "B7"): "P1"})
-    row = ROW + (excel.OPERATING + excel.VALUATION).index("ev_ebitda")
+    row = ROW + (excel.STATISTIC_METRICS).index("ev_ebitda")
     assert default.value("Peer Set", "B8") == "it" and changed.value("Peer Set", "B8") == "pharma"
     assert changed.value("Peer Statistics", "B7") == "P1"
     # P1's peers P2 (18) and P3 (N/A): one peer with a value
@@ -361,6 +368,22 @@ def test_star_schema_validation():
     assert any("null in key" in p for p in powerbi.validate_star_schema(null_key))
 
 
+def test_correlation_helper_table_validation():
+    pairs = pd.DataFrame({"company_a_key": [1, 1, 2, 2], "company_b_key": [1, 2, 1, 2],
+                          "window_label": ["3y"] * 4, "correlation": [1.0, 0.4, 0.4, 1.0]})
+    tables = {**star(), "agg_return_correlation": pairs}
+    assert powerbi.validate_helpers(tables) == []
+    # it is a helper, not part of the star schema: the star validation does not require it
+    assert "agg_return_correlation" not in powerbi.ORDER
+    assert powerbi.validate_star_schema(star()) == []
+    unknown = {**star(), "agg_return_correlation": pairs.assign(company_b_key=[1, 2, 1, 77])}
+    assert powerbi.validate_helpers(unknown) == [
+        "agg_return_correlation.company_b_key: 1 value(s) not in dim_company.company_key"]
+    repeated = {**star(), "agg_return_correlation": pd.concat([pairs, pairs.iloc[[0]]])}
+    assert any("duplicate" in p for p in powerbi.validate_helpers(repeated))
+    assert "agg_return_correlation: missing" in powerbi.validate_helpers(star())
+
+
 # ------------------------------------------------- against the project database ----
 
 @pytest.fixture(scope="module")
@@ -405,6 +428,20 @@ def test_powerbi_csvs_match_the_star_schema(project_exports):
     assert (april["fiscal_year_label"], april["fiscal_quarter_label"]) == ("FY2026", "Q1 FY2026")
     assert {"company", "index"} == set(tables["dim_company"]["entity_type"])
 
+    # the correlation helper table: both orderings and the diagonal for each window
+    pairs = pd.read_csv(folder / "powerbi" / "agg_return_correlation.csv")
+    assert list(pairs.columns) == ["company_a_key", "company_b_key", "window_label",
+                                   "window_start", "window_end", "correlation", "n_obs"]
+    assert powerbi.validate_helpers({**tables, "agg_return_correlation": pairs}) == []
+    assert len(pairs) == written["powerbi_rows"]["agg_return_correlation"]
+    n_tickers = len(tables["dim_company"])
+    assert (pairs.groupby("window_label").size() == n_tickers ** 2).all()
+    diagonal = pairs[pairs["company_a_key"] == pairs["company_b_key"]]
+    assert (diagonal["correlation"] == 1.0).all()
+    mirrored = pairs.merge(pairs, left_on=["company_a_key", "company_b_key", "window_label"],
+                           right_on=["company_b_key", "company_a_key", "window_label"])
+    assert (mirrored["correlation_x"] - mirrored["correlation_y"]).abs().max() < 1e-12
+
 
 @pytest.mark.integration
 @pytest.mark.parametrize("target", ["TCS.NS", "HINDUNILVR.NS", "HDFCBANK.NS", "INFY.NS"])
@@ -421,7 +458,7 @@ def test_exported_comps_workbook_matches_stored_comparisons(project_exports, tar
                             {("Peer Set", "B7"): target})
     assert compare_peer_statistics(calculated, comps.compare(metrics, companies, target)) == []
     # and against what the pipeline stored in PostgreSQL
-    for offset, name in enumerate(excel.OPERATING + excel.VALUATION):
+    for offset, name in enumerate(excel.STATISTIC_METRICS):
         row = ROW + offset
         assert calculated.value("Peer Statistics", f"D{row}") == stored.at[name, "n_peers"]
         median = stored.at[name, "peer_median"]

@@ -2,7 +2,8 @@
 
 The star schema is defined as views in the `mart` schema (sql/schema.sql). This
 module writes each view to data/exports/powerbi/{view}.csv and checks that the
-files form a valid star schema before they are handed to Power BI.
+files form a valid star schema before they are handed to Power BI. One helper table,
+agg_return_correlation, is exported alongside the star schema but is not part of it.
 
 Power BI Desktop runs on Windows only. The report (.pbix) is built by the user
 from these files, following docs/powerbi_model.md; no .pbix is produced here.
@@ -37,12 +38,38 @@ RELATIONSHIPS = {
 }
 ORDER = {**DIMENSIONS, **FACTS}
 
+# Helper tables exported alongside the star schema but not part of it. The correlation
+# table is company x company: both keys refer to dim_company, with no active relationship.
+HELPERS = {"agg_return_correlation": ["company_a_key", "company_b_key", "window_label"]}
+HELPER_KEYS = {("agg_return_correlation", "company_a_key"): ("dim_company", "company_key"),
+               ("agg_return_correlation", "company_b_key"): ("dim_company", "company_key")}
+EXPORTED = {**ORDER, **HELPERS}
+
 
 def read_view(conn: Connection, view: str) -> pd.DataFrame:
-    if view not in ORDER:
+    if view not in EXPORTED:
         raise ValueError(f"unknown mart view: {view}")
-    return pd.read_sql(text(f"SELECT * FROM mart.{view} ORDER BY {', '.join(ORDER[view])}"),
+    return pd.read_sql(text(f"SELECT * FROM mart.{view} ORDER BY {', '.join(EXPORTED[view])}"),
                        conn)
+
+
+def validate_helpers(tables: dict[str, pd.DataFrame]) -> list[str]:
+    """Problems in the helper tables: a non-unique grain, or a key with no row in its dimension."""
+    problems = []
+    for name, grain in HELPERS.items():
+        if name not in tables:
+            problems.append(f"{name}: missing")
+            continue
+        duplicates = int(tables[name].duplicated(subset=grain).sum())
+        if duplicates:
+            problems.append(f"{name}: {duplicates} duplicate row(s) at grain {grain}")
+    for (table, column), (dimension, key) in HELPER_KEYS.items():
+        if table in tables and dimension in tables:
+            orphans = ~tables[table][column].isin(tables[dimension][key])
+            if orphans.any():
+                problems.append(f"{table}.{column}: {int(orphans.sum())} value(s) not in "
+                                f"{dimension}.{key}")
+    return problems
 
 
 def validate_star_schema(tables: dict[str, pd.DataFrame]) -> list[str]:
@@ -81,8 +108,8 @@ def validate_star_schema(tables: dict[str, pd.DataFrame]) -> list[str]:
 def export_powerbi(conn: Connection, out_dir: Path) -> dict:
     """Write one CSV per mart view. Raises if the result is not a valid star schema."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    tables = {view: read_view(conn, view) for view in ORDER}
-    problems = validate_star_schema(tables)
+    tables = {view: read_view(conn, view) for view in EXPORTED}
+    problems = validate_star_schema(tables) + validate_helpers(tables)
     if problems:
         raise ValueError("Power BI export is not a valid star schema: " + "; ".join(problems))
     rows = {}

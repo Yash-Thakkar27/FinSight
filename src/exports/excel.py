@@ -1,7 +1,8 @@
 """Excel exports (openpyxl).
 
     financial_summary.xlsx      Company Overview, Financial Ratios, Growth Analysis, Valuation
-    comparable_companies.xlsx   Peer Set, Operating Metrics, Valuation Multiples, Peer Statistics
+    comparable_companies.xlsx   Peer Set, Operating Metrics, Capital Structure,
+                                Valuation Multiples, Peer Statistics
     market_analysis.xlsx        Returns, Risk, Correlation
 
 Design rules:
@@ -51,9 +52,10 @@ THIN = Side(style="thin", color="BFBFBF")
 FORMATS = {"pct": "0.0%", "multiple": '0.0"x"', "ratio": "0.00", "crore": "#,##0",
            "per_share": "#,##0.00", "integer": "0", "correlation": "0.00"}
 
-OPERATING = [name for name, _ in comps.COMPS_METRICS["operating"]
-             + comps.COMPS_METRICS["capital_structure"]]
+OPERATING = [name for name, _ in comps.COMPS_METRICS["operating"]]
+CAPITAL_STRUCTURE = [name for name, _ in comps.COMPS_METRICS["capital_structure"]]
 VALUATION = [name for name, _ in comps.COMPS_METRICS["valuation"]]
+STATISTIC_METRICS = OPERATING + CAPITAL_STRUCTURE + VALUATION     # row order on Peer Statistics
 PERIOD_TYPE = {name: period for group in comps.COMPS_METRICS.values() for name, period in group}
 RATIO_SHEET_METRICS = ["gross_margin", "ebitda_margin", "ebit_margin", "net_margin", "roe", "roa",
                        "debt_to_equity", "net_debt_to_ebitda", "current_ratio", "quick_ratio",
@@ -448,7 +450,7 @@ def build_comparable_companies(data: ExportData, target: str | None = None) -> W
         cell.fill = FILL_FORMULA
     set_widths(ws, {"A": 24, "B": 34, "C": 22, "D": 16, "E": 16, "F": 22})
 
-    # ---- the two metric sheets, each with a block of "peer values" formulas beside the data
+    # ---- the three metric sheets, each with a block of "peer values" formulas beside the data
     locations = {}       # metric -> (sheet, value column letter, peer-value column letter)
 
     def metric_sheet(title: str, names: list[str], heading: str, units: str, note: str) -> None:
@@ -480,12 +482,16 @@ def build_comparable_companies(data: ExportData, target: str | None = None) -> W
         set_widths(ws, {"A": 18, "B": 34, "C": 14,
                         **{get_column_letter(c): 13 for c in range(4, helper_start + len(names))}})
 
-    metric_sheet("Operating Metrics", OPERATING,
-                 "Operating and capital-structure metrics, latest fiscal year",
-                 "growth, margins and returns as percentages; debt/equity and current ratio as "
-                 "ratios; net debt/EBITDA in turns",
+    metric_sheet("Operating Metrics", OPERATING, "Operating metrics, latest fiscal year",
+                 "growth, margins and returns as percentages",
                  "Computed in each company's reporting currency; growth for a company reporting "
                  "in another currency is reporting-currency growth.")
+    metric_sheet("Capital Structure", CAPITAL_STRUCTURE,
+                 "Capital structure, latest fiscal year",
+                 "debt/equity and current ratio as ratios; net debt/EBITDA in turns (negative = "
+                 "net cash)",
+                 "Not meaningful for banks (deposits are not debt), so banks show N/A. Cash is "
+                 "cash and short-term investments.")
     metric_sheet("Valuation Multiples", VALUATION, "Valuation multiples, current",
                  "multiples in turns (x)",
                  "N/A when the denominator is zero or negative or the multiple is not meaningful "
@@ -514,7 +520,7 @@ def build_comparable_companies(data: ExportData, target: str | None = None) -> W
                 for name, _ in items}
     is_peer = column_range("Peer Set", "F")
     tickers_on = "'%s'!$A$" + f"{FIRST_DATA_ROW}:$A${last_row}"
-    for r, name in enumerate(OPERATING + VALUATION, start=FIRST_DATA_ROW):
+    for r, name in enumerate(STATISTIC_METRICS, start=FIRST_DATA_ROW):
         sheet, value_letter, helper_letter = locations[name]
         values, peers = column_range(sheet, value_letter), column_range(sheet, helper_letter)
         number_format = metric_format(name)
@@ -555,7 +561,7 @@ def build_comparable_companies(data: ExportData, target: str | None = None) -> W
                 cell.number_format = FORMATS["integer"]
         ws.cell(r, 12, "percentage points (target − median)" if is_pct
                 else "relative premium (target ÷ median − 1)")
-    last_stat = FIRST_DATA_ROW + len(OPERATING + VALUATION) - 1
+    last_stat = FIRST_DATA_ROW + len(STATISTIC_METRICS) - 1
     median_formatting(ws, f"C{FIRST_DATA_ROW}:C{last_stat}", f"$C{FIRST_DATA_ROW}",
                       f"$G{FIRST_DATA_ROW}")
     ws.cell(last_stat + 2, 1, "Shading on the Target column: blue = above the peer median, grey "

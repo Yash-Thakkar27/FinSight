@@ -161,7 +161,10 @@ def position_label(target_value: float | None, peer_values: pd.Series) -> str | 
         return None
     n_peers = rank[1] - 1
     if n_peers >= MIN_PEERS_FOR_DISTRIBUTION:
-        # round half up (62.5 -> 63), the same as Excel's ROUND in the exported workbook
+        # Round half up (62.5 -> 63), the same as Excel's ROUND in the exported workbook.
+        # Python's built-in round() rounds half to even ("banker's rounding": round(62.5) is
+        # 62, round(63.5) is 64), which made the app and the workbook disagree on exact
+        # halves. int(x + 0.5) is half-up for the non-negative values a percentile takes.
         return f"{ordinal(int(percentile_rank(target_value, peer_values) + 0.5))} percentile"
     return f"{ordinal(rank[0])} of {rank[1]}"
 
