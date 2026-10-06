@@ -672,3 +672,16 @@ FROM core.metrics m
 WHERE m.metric_name IN ('market_cap', 'enterprise_value', 'pe_ratio', 'pb_ratio',
                         'ev_ebitda', 'ev_revenue')
 GROUP BY m.company_id, m.as_of_date, m.period_end_date, m.period_type;
+
+-- Helper table for Power BI, outside the star schema: pairwise correlation of daily
+-- returns. It is company x company, so it has two company keys and cannot hang off
+-- dim_company with one active relationship. See docs/powerbi_model.md, section 5.
+CREATE OR REPLACE VIEW mart.agg_return_correlation AS
+SELECT x.company_id_a   AS company_a_key,
+       x.company_id_b   AS company_b_key,
+       x.window_label,                      -- 1y | 3y | full
+       x.start_date     AS window_start,
+       x.end_date       AS window_end,
+       x.correlation,
+       x.n_observations AS n_obs
+FROM core.correlations x;

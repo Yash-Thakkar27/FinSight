@@ -191,6 +191,19 @@ Each model card lists its own limitations. The ones that apply across the lab:
 10p. **No accuracy for unsupervised tasks.** Anomaly flags and regimes have no ground truth, so
      only agreement between methods can be reported.
 
+## Exports
+
+10q. **The Excel files have not been opened in Excel or LibreOffice.** Neither was available on
+     the development machine. Their formulas are verified by calculating them with an independent
+     engine and comparing the results with the pipeline's figures, so the numbers are checked;
+     appearance (number formats, column widths, conditional formatting, the drop-down) is not.
+
+10r. **No Power BI report exists.** Power BI Desktop is Windows-only. The project provides the
+     star schema (CSV files and database views) and a written specification with DAX measures.
+     The measures are written against the exported schema but have never been run.
+
+10s. **No PivotTables.** openpyxl cannot create them; `excel_guide.md` gives the manual steps.
+
 ## Methodology simplifications
 
 10a. **Constant risk-free rate.** One 91-day T-bill yield (5.2599%, as of 2026-09-02) is applied to
