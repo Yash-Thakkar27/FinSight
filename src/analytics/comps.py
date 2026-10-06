@@ -161,7 +161,8 @@ def position_label(target_value: float | None, peer_values: pd.Series) -> str | 
         return None
     n_peers = rank[1] - 1
     if n_peers >= MIN_PEERS_FOR_DISTRIBUTION:
-        return f"{ordinal(round(percentile_rank(target_value, peer_values)))} percentile"
+        # round half up (62.5 -> 63), the same as Excel's ROUND in the exported workbook
+        return f"{ordinal(int(percentile_rank(target_value, peer_values) + 0.5))} percentile"
     return f"{ordinal(rank[0])} of {rank[1]}"
 
 

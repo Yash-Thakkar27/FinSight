@@ -6,7 +6,7 @@
     4 validate         src/validation
     5 upsert           src/database/load (staging -> core)
     6 recompute metrics   src/analytics
-    7 regenerate exports  (Phase 8)
+    7 regenerate exports  src/exports (Excel workbooks, Power BI star schema)
     8 write the pipeline_runs row
 
 With skip_fetch the pipeline rebuilds everything from the raw snapshots already
@@ -20,12 +20,13 @@ from pathlib import Path
 
 from sqlalchemy import Engine
 
-from config.settings import PROCESSED_DIR, RAW_DIR, Universe
+from config.settings import EXPORTS_DIR, PROCESSED_DIR, RAW_DIR, Universe
 from src.analytics.compute import recompute_metrics
 from src.analytics.peer_analytics import recompute_peer_analytics
 from src.cleaning.pipeline import run_cleaning
 from src.database import load
 from src.database.setup import table_counts
+from src.exports.run import generate_exports
 from src.ingestion.run import run_ingestion
 from src.validation import checks
 
@@ -35,6 +36,7 @@ log = logging.getLogger(__name__)
 def run_pipeline(universe: Universe, engine: Engine, *, tickers: list[str] | None = None,
                  skip_fetch: bool = False, raw_dir: Path = RAW_DIR,
                  processed_dir: Path | None = PROCESSED_DIR,
+                 exports_dir: Path | None = EXPORTS_DIR,
                  as_of: date | None = None) -> dict:
     """Run the pipeline. Returns the run id, status, quality summary and report text."""
     as_of = as_of or date.today()
@@ -103,7 +105,17 @@ def run_pipeline(universe: Universe, engine: Engine, *, tickers: list[str] | Non
         log.info("Correlations: %d pairs stored for windows %s", peer_counts["correlations"],
                  ", ".join(peer_counts["correlation_windows"]))
         log.info("Step 6 (recompute metrics): %.1fs", time.perf_counter() - start)
-        log.info("Step 7 (regenerate exports): not implemented yet (Phase 8)")
+        # Step 7: Excel workbooks and the Power BI star schema, from what is now stored
+        start = time.perf_counter()
+        exports = None
+        if exports_dir is not None:
+            with engine.connect() as conn:
+                exports = generate_exports(conn, exports_dir)
+            log.info("Step 7 (regenerate exports): %d workbooks, %d CSV files in %.1fs",
+                     len(exports["workbooks"]), len(exports["powerbi_rows"]),
+                     time.perf_counter() - start)
+        else:
+            log.info("Step 7 (regenerate exports): skipped (no export directory)")
 
         # Step 8
         status = "partial" if failed_datasets else "success"
@@ -114,7 +126,8 @@ def run_pipeline(universe: Universe, engine: Engine, *, tickers: list[str] | Non
         log.info("Step 8 (pipeline_runs): run %d finished with status '%s'", run_id, status)
         return {"run_id": run_id, "status": status, "summary": summary, "report": report,
                 "table_counts": counts, "failed_datasets": failed_datasets,
-                "metric_counts": metric_counts, "peer_counts": peer_counts}
+                "metric_counts": metric_counts, "peer_counts": peer_counts,
+                "exports": exports}
     except Exception as exc:
         log.exception("Pipeline run %d failed", run_id)
         load.finish_run(engine, run_id, "failed", None, f"{type(exc).__name__}: {exc}"[:500])

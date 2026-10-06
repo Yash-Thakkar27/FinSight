@@ -531,3 +531,144 @@ CREATE TABLE IF NOT EXISTS staging.financial_statements (
     raw_file         TEXT,
     PRIMARY KEY (ticker, statement, line_item, period_end_date, period_type)
 );
+
+-- ---------------------------------------------------------------------------
+-- mart: star schema for Power BI. Views over core; exported to CSV by
+-- src/exports/powerbi.py. Surrogate keys: company_key and sector_key are the
+-- serial ids generated in core; date_key is the date as an integer YYYYMMDD.
+--
+--   dim_sector 1 --- * dim_company 1 --- * fact_market_prices
+--                                  1 --- * fact_financials
+--                                  1 --- * fact_metrics
+--                                  1 --- * fact_valuation
+--   dim_date   1 --- * every fact (on date_key)
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE VIEW mart.dim_sector AS
+SELECT sector_id AS sector_key, sector_name
+FROM core.sectors
+UNION ALL
+SELECT 0, 'Benchmark index';             -- so the index row in dim_company has a sector
+
+CREATE OR REPLACE VIEW mart.dim_company AS
+SELECT c.company_id                       AS company_key,
+       c.ticker,
+       c.company_name,
+       c.entity_type,                     -- company | index
+       COALESCE(c.sector_id, 0)           AS sector_key,
+       COALESCE(i.industry_name, 'Index') AS industry_name,
+       COALESCE(c.peer_group, 'index')    AS peer_group,
+       COALESCE(c.sector_type, 'index')   AS sector_type,
+       c.exchange,
+       c.country,
+       COALESCE((SELECT max(f.original_currency) FROM core.financial_statements f
+                 WHERE f.company_id = c.company_id), 'INR') AS reporting_currency
+FROM core.companies c
+LEFT JOIN core.industries i USING (industry_id);
+
+-- One row per calendar day from the first to the last date used by any fact.
+CREATE OR REPLACE VIEW mart.dim_date AS
+WITH bounds AS (
+    SELECT LEAST((SELECT min(date) FROM core.market_prices),
+                 (SELECT min(period_end_date) FROM core.financial_statements)) AS first_date,
+           GREATEST((SELECT max(date) FROM core.market_prices),
+                    (SELECT max(period_end_date) FROM core.financial_statements)) AS last_date
+), days AS (
+    SELECT generate_series(first_date, last_date, interval '1 day')::date AS date FROM bounds
+)
+SELECT to_char(d.date, 'YYYYMMDD')::int                                   AS date_key,
+       d.date,
+       extract(year FROM d.date)::int                                     AS year,
+       extract(quarter FROM d.date)::int                                  AS quarter,
+       extract(month FROM d.date)::int                                    AS month,
+       to_char(d.date, 'Mon')                                             AS month_name,
+       to_char(d.date, 'YYYY-MM')                                         AS year_month,
+       extract(isodow FROM d.date)::int                                   AS day_of_week,
+       -- Indian fiscal year: April to March, named for the year it ends in
+       (extract(year FROM d.date) + CASE WHEN extract(month FROM d.date) >= 4 THEN 1 ELSE 0 END)::int
+                                                                          AS fiscal_year,
+       'FY' || (extract(year FROM d.date)
+                + CASE WHEN extract(month FROM d.date) >= 4 THEN 1 ELSE 0 END)::int
+                                                                          AS fiscal_year_label,
+       (mod(extract(month FROM d.date)::int - 4 + 12, 12) / 3 + 1)        AS fiscal_quarter,
+       'Q' || (mod(extract(month FROM d.date)::int - 4 + 12, 12) / 3 + 1)
+           || ' FY' || (extract(year FROM d.date)
+                        + CASE WHEN extract(month FROM d.date) >= 4 THEN 1 ELSE 0 END)::int
+                                                                          AS fiscal_quarter_label,
+       EXISTS (SELECT 1 FROM core.market_prices p
+               WHERE p.date = d.date AND NOT p.is_stale_quote)            AS is_trading_day
+FROM days d;
+
+CREATE OR REPLACE VIEW mart.fact_market_prices AS
+SELECT p.company_id                        AS company_key,
+       to_char(p.date, 'YYYYMMDD')::int    AS date_key,
+       p.open::float8                      AS open,
+       p.high::float8                      AS high,
+       p.low::float8                       AS low,
+       p.close::float8                     AS close,
+       p.adj_close::float8                 AS adj_close,
+       p.volume,
+       -- daily return on adjusted close, between consecutive traded rows; NULL on a
+       -- placeholder row and on each ticker's first row. Partitioning by is_stale_quote
+       -- makes lag() step over placeholder rows.
+       CASE WHEN p.is_stale_quote THEN NULL
+            ELSE p.adj_close::float8
+                 / NULLIF(lag(p.adj_close::float8)
+                          OVER (PARTITION BY p.company_id, p.is_stale_quote ORDER BY p.date), 0)
+                 - 1
+       END                                 AS daily_return,
+       p.is_stale_quote
+FROM core.market_prices p;
+
+CREATE OR REPLACE VIEW mart.fact_financials AS
+SELECT f.company_id                                    AS company_key,
+       to_char(f.period_end_date, 'YYYYMMDD')::int     AS date_key,       -- period end
+       f.period_type,
+       f.statement,
+       f.line_item,
+       f.value::float8                                 AS value_inr,      -- absolute INR
+       f.original_value::float8                        AS value_reported, -- reporting currency
+       f.original_currency                             AS reporting_currency,
+       (f.fx_rate IS NOT NULL)                         AS is_translated,
+       f.unit,
+       f.fiscal_year,
+       f.fiscal_quarter,
+       f.missing_reason,
+       f.is_calculated
+FROM core.financial_statements f;
+
+-- Ratios, growth, return and risk metrics. Valuation is in fact_valuation.
+CREATE OR REPLACE VIEW mart.fact_metrics AS
+SELECT m.company_id                                    AS company_key,
+       to_char(m.period_end_date, 'YYYYMMDD')::int     AS date_key,
+       m.period_type,                                  -- annual | quarterly | point_in_time
+       m.metric_name,
+       m.value,
+       m.unit,
+       m.na_reason,
+       m.method,
+       m.reporting_currency,
+       m.is_translated
+FROM core.metrics m
+WHERE m.metric_name NOT IN ('market_cap', 'enterprise_value', 'pe_ratio', 'pb_ratio',
+                            'ev_ebitda', 'ev_revenue');
+
+-- One row per company and valuation date: 'current' (latest price, TTM basis) or
+-- 'fiscal_year_end' (price at the year end, that year's figures).
+CREATE OR REPLACE VIEW mart.fact_valuation AS
+SELECT m.company_id                                    AS company_key,
+       to_char(m.as_of_date, 'YYYYMMDD')::int          AS date_key,       -- price date
+       to_char(m.period_end_date, 'YYYYMMDD')::int     AS period_end_date_key,
+       CASE m.period_type WHEN 'ttm' THEN 'current' ELSE 'fiscal_year_end' END AS valuation_basis,
+       max(m.value) FILTER (WHERE m.metric_name = 'market_cap')        AS market_cap_inr,
+       max(m.value) FILTER (WHERE m.metric_name = 'enterprise_value')  AS enterprise_value_inr,
+       max(m.value) FILTER (WHERE m.metric_name = 'pe_ratio')          AS pe_ratio,
+       max(m.value) FILTER (WHERE m.metric_name = 'pb_ratio')          AS pb_ratio,
+       max(m.value) FILTER (WHERE m.metric_name = 'ev_ebitda')         AS ev_ebitda,
+       max(m.value) FILTER (WHERE m.metric_name = 'ev_revenue')        AS ev_revenue,
+       max(m.method) FILTER (WHERE m.metric_name = 'pe_ratio')         AS earnings_basis,
+       bool_or(m.is_translated)                                        AS is_translated
+FROM core.metrics m
+WHERE m.metric_name IN ('market_cap', 'enterprise_value', 'pe_ratio', 'pb_ratio',
+                        'ev_ebitda', 'ev_revenue')
+GROUP BY m.company_id, m.as_of_date, m.period_end_date, m.period_type;

@@ -149,7 +149,7 @@ def test_peer_statistics_exclude_the_target():
     assert row["target_value"] == 30.0
     assert row["percentile_rank"] == 62.5           # 2 below + half of 1 equal = 2.5 / 4
     assert (row["rank_position"], row["rank_of"]) == (2, 5)             # only D is higher
-    assert row["position_label"] == "62nd percentile"
+    assert row["position_label"] == "63rd percentile"        # 62.5 rounds half up
     assert row["premium_pct"] == pytest.approx(20.0)                    # 30 / 25 - 1
     assert row["difference"] == pytest.approx(5.0)
 

@@ -119,7 +119,7 @@ def raw_dir(tmp_path_factory):
 
 def run(engine, raw_dir):
     return run_pipeline(UNIVERSE, engine, skip_fetch=True, raw_dir=raw_dir, processed_dir=None,
-                        as_of=pd.Timestamp("2026-03-31").date())
+                        exports_dir=None, as_of=pd.Timestamp("2026-03-31").date())
 
 
 def scalar(engine, sql, **params):

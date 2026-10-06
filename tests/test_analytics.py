@@ -306,6 +306,19 @@ def test_liquidity_ratios_never_assume_zero_inventory():
 
 # --- sector applicability ------------------------------------------------------
 
+def test_registry_is_complete_whichever_module_is_imported_first():
+    """A fresh interpreter that imports only the registry still sees every metric."""
+    import subprocess
+    import sys
+
+    code = ("from src.analytics.registry import REGISTRY; "
+            "print(len(REGISTRY), 'ebitda_margin' in REGISTRY, 'pe_ratio' in REGISTRY, "
+            "'sharpe_1y' in REGISTRY)")
+    output = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                            check=True).stdout.split()
+    assert int(output[0]) == len(REGISTRY) and output[1:] == ["True", "True", "True"]
+
+
 def test_applicability_matrix_matches_the_spec():
     non_financial_only = ["gross_margin", "ebitda_margin", "ebit_margin", "ev_ebitda",
                           "ev_revenue", "current_ratio", "quick_ratio", "debt_to_equity",
