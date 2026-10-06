@@ -59,31 +59,43 @@ companies:
     industry: IT Services
     peer_group: it_services
     sector_type: non_financial
+  - ticker: TECHM.NS
+    name: Tech Mahindra
+    sector: Information Technology
+    industry: IT Services
+    peer_group: it_services
+    sector_type: non_financial
 
   # Banks
   - ticker: HDFCBANK.NS
     name: HDFC Bank
     sector: Financials
     industry: Private Sector Banks
-    peer_group: private_banks
+    peer_group: banks
     sector_type: bank
   - ticker: ICICIBANK.NS
     name: ICICI Bank
     sector: Financials
     industry: Private Sector Banks
-    peer_group: private_banks
+    peer_group: banks
     sector_type: bank
   - ticker: AXISBANK.NS
     name: Axis Bank
     sector: Financials
     industry: Private Sector Banks
-    peer_group: private_banks
+    peer_group: banks
     sector_type: bank
   - ticker: KOTAKBANK.NS
     name: Kotak Mahindra Bank
     sector: Financials
     industry: Private Sector Banks
-    peer_group: private_banks
+    peer_group: banks
+    sector_type: bank
+  - ticker: SBIN.NS
+    name: State Bank of India
+    sector: Financials
+    industry: Public Sector Banks
+    peer_group: banks
     sector_type: bank
 
   # Pharma
@@ -101,6 +113,18 @@ companies:
     sector_type: non_financial
   - ticker: DRREDDY.NS
     name: Dr. Reddy's Laboratories
+    sector: Pharmaceuticals
+    industry: Pharmaceuticals
+    peer_group: pharma
+    sector_type: non_financial
+  - ticker: LUPIN.NS
+    name: Lupin
+    sector: Pharmaceuticals
+    industry: Pharmaceuticals
+    peer_group: pharma
+    sector_type: non_financial
+  - ticker: DIVISLAB.NS
+    name: Divi's Laboratories
     sector: Pharmaceuticals
     industry: Pharmaceuticals
     peer_group: pharma
@@ -127,6 +151,18 @@ companies:
     industry: Automobile Manufacturers
     peer_group: auto
     sector_type: non_financial
+  - ticker: HEROMOTOCO.NS
+    name: Hero MotoCorp
+    sector: Auto
+    industry: Automobile Manufacturers
+    peer_group: auto
+    sector_type: non_financial
+  - ticker: EICHERMOT.NS
+    name: Eicher Motors
+    sector: Auto
+    industry: Automobile Manufacturers
+    peer_group: auto
+    sector_type: non_financial
 
   # Consumer
   - ticker: HINDUNILVR.NS
@@ -145,5 +181,17 @@ companies:
     name: Asian Paints
     sector: Consumer
     industry: Paints
+    peer_group: consumer
+    sector_type: non_financial
+  - ticker: NESTLEIND.NS
+    name: Nestle India
+    sector: Consumer
+    industry: FMCG
+    peer_group: consumer
+    sector_type: non_financial
+  - ticker: BRITANNIA.NS
+    name: Britannia Industries
+    sector: Consumer
+    industry: FMCG
     peer_group: consumer
     sector_type: non_financial

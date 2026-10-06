@@ -87,6 +87,20 @@ class ValidationThresholds(BaseModel):
     eps_scale_bounds: tuple[float, float] = (0.2, 5.0)   # statement EPS / source trailing EPS
 
 
+class AnomalySettings(BaseModel):
+    """Thresholds for src/analytics/anomaly_detection.py.
+
+    Conventional values, fixed before any results were examined.
+    """
+
+    iqr_multiplier: float = 1.5             # Tukey fences for fundamentals
+    market_iqr_multiplier: float = 3.0      # "far out" fences for daily market data (fat tails)
+    modified_zscore_threshold: float = 3.5  # Iglewicz & Hoaglin (1993)
+    rolling_window: int = 60                # trading days of history behind each market observation
+    rolling_min_periods: int = 30
+    min_peer_group_size: int = 3            # members needed for a peer-group median
+
+
 class Benchmark(BaseModel):
     ticker: str
     name: str
@@ -118,6 +132,7 @@ class Universe(BaseModel):
     price_history_years: int = 5
     fx: dict[str, FxSource] = Field(default_factory=dict)
     validation: ValidationThresholds = Field(default_factory=ValidationThresholds)
+    anomalies: AnomalySettings = Field(default_factory=AnomalySettings)
     companies: list[Company]
 
     @model_validator(mode="after")

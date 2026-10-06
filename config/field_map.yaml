@@ -33,15 +33,24 @@ income:
   depreciation_amortization:
     unit: INR
     sources: [Reconciled Depreciation, Depreciation And Amortization In Income Statement]
-  net_income:
+  net_income:                    # attributable to shareholders of the parent (excludes minority interest)
     unit: INR
     sources: [Net Income, Net Income Common Stockholders]
+  # EPS as the source reports it. Stored for reconciliation only: its history is not
+  # consistently restated after splits and bonus issues, so FinSight calculates EPS itself.
   eps_basic:
     unit: INR_per_share
     sources: [Basic EPS]
   eps_diluted:
     unit: INR_per_share
     sources: [Diluted EPS]
+  # Weighted-average shares for the period, as reported (basis checked in analytics/shares.py).
+  weighted_average_shares_diluted:
+    unit: shares
+    sources: [Diluted Average Shares]
+  weighted_average_shares_basic:
+    unit: shares
+    sources: [Basic Average Shares]
   interest_expense:
     unit: INR
     sources: [Interest Expense]
@@ -115,7 +124,8 @@ cashflow:
     unit: INR
     sources: [Free Cash Flow]
 
-# Daily price columns from Ticker.history(auto_adjust=False)
+# Daily price columns from Ticker.history(auto_adjust=False). The same response carries a
+# "Stock Splits" column, which is the source of core.stock_splits.
 market_prices:
   Open: open
   High: high
