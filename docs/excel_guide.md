@@ -1,13 +1,13 @@
 # Excel exports guide
 
-Three workbooks are written to `data/exports/excel/` by `python scripts/update_data.py`
+Three workbooks are generated into `data/exports/excel/` (not kept in git) by `python scripts/update_data.py`
 (step 7 of the pipeline; `--skip-fetch` regenerates them without any network access).
 They are built with openpyxl from the PostgreSQL database.
 
 | Workbook | Sheets |
 |---|---|
 | `financial_summary.xlsx` | Company Overview, Financial Ratios, Growth Analysis, Valuation |
-| `comparable_companies.xlsx` | Peer Set, Operating Metrics, Valuation Multiples, Peer Statistics |
+| `comparable_companies.xlsx` | Peer Set, Operating Metrics, Capital Structure, Valuation Multiples, Peer Statistics |
 | `market_analysis.xlsx` | Returns, Risk, Correlation |
 
 ## Conventions on every sheet
@@ -32,7 +32,7 @@ They are built with openpyxl from the PostgreSQL database.
 2. `B8` finds the target's peer group with `INDEX`/`MATCH`. Column F marks each company as a peer
    with `=AND(peer group = target's group, ticker <> target)`, so **the target is never its own
    peer**.
-3. On **Operating Metrics** and **Valuation Multiples**, the block to the right of the data
+3. On **Operating Metrics**, **Capital Structure** and **Valuation Multiples**, the block to the right of the data
    repeats each value only where the company is a peer and the value is a number:
    `=IF(AND('Peer Set'!F12, ISNUMBER(D12)), D12, "")`.
 4. **Peer Statistics** summarizes those blocks:

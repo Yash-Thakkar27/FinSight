@@ -197,7 +197,7 @@ How to use the files is in `excel_guide.md` and `powerbi_model.md`.
 | I3 | Peer statistics are computed from a block of "peer value" formulas beside each metric table (the value if the company is a peer and has a number, otherwise blank). | Keeps every statistic an ordinary formula (`MEDIAN`, `PERCENTILE.INC`, `MIN`, `MAX`) with no array formulas, which behave differently between Excel versions and LibreOffice. The mean uses `AVERAGEIFS` on the peer flag directly. |
 | I4 | The workbook applies the same rules as the app: target excluded, N/A peers excluded, P25 / mean / P75 hidden and a rank shown when fewer than four peers have a value. | One set of rules everywhere (decisions D7 and D11). |
 | I5 | Missing figures are the text "N/A"; suppressed statistics are "–". | Excel's statistical functions ignore text, so an N/A can never enter a median. A blank cell could be read as zero by a formula. |
-| I6 | Capital-structure metrics are on the "Operating Metrics" sheet. | The spec names four sheets for this workbook. |
+| I6 | Capital-structure metrics have their own "Capital Structure" sheet (owner's decision, 2026-10-07; the spec's sheet list is a minimum). | Five sheets in `comparable_companies.xlsx`. |
 | I7 | The Growth Analysis sheet recomputes year-on-year revenue growth with formulas and reconciles it with the stored figure. | Shows the growth rule in the workbook itself, and gives a built-in check that the export agrees with the database. |
 | I8 | Percentile labels round half up (62.5 → 63) in both the app and Excel. | Python's default rounding goes to the even number and Excel's `ROUND` goes up; the two would otherwise disagree on exact halves. |
 | I9 | The star schema is defined as views in the `mart` schema; the CSV files are exports of those views. | One definition serves both a direct database connection and file import. |
@@ -206,5 +206,17 @@ How to use the files is in `excel_guide.md` and `powerbi_model.md`.
 | I12 | `dim_sector` has an extra row, "Benchmark index", with key 0, which the Nifty 50 row in `dim_company` points to. | Every foreign key must resolve; a NULL sector key would break the relationship. |
 | I13 | `fact_market_prices` includes placeholder rows, flagged; `daily_return` is NULL on them and steps over them. | The fact table mirrors the database. The documented DAX measures exclude them. |
 | I14 | The export refuses to write the CSV files if a key is null, a grain is not unique or a foreign key has no match. | A broken star schema fails silently in Power BI (blank rows, wrong totals). |
-| I15 | The pairwise correlation matrix is not in the star schema. | It is company × company, not a fact at a date. It is in `market_analysis.xlsx` and `core.correlations`. |
+| I15 | The pairwise correlation matrix is exported as a helper table, `agg_return_correlation`, outside the star schema (owner's decision, 2026-10-07). A `window_label` column is added to the owner's column list. | It is company × company, not a fact at a date. Three windows are stored, and a label is easier to filter on than a date range. |
 | I16 | No `.pbix` is produced and the DAX measures are untested. | Power BI Desktop is Windows-only. `powerbi_model.md` says so. |
+
+## Phase 9 (notebooks, documentation, final verification)
+
+| # | Assumption | Reason |
+|---|---|---|
+| J1 | The fresh-clone check used a copy of the repository's tracked and untracked-but-not-ignored files in an empty directory, with a new virtual environment and its own PostgreSQL container. | It is what a clone would contain once the pending changes are committed. Nothing ignored (data, `.env`, virtual environment) was carried over. |
+| J2 | In that check `.env` set `POSTGRES_PORT=5434` and `POSTGRES_CONTAINER=finsight-db-freshclone`, and the directory had a different name. | The original project was running on the same machine; the defaults would have collided with it. On a clean machine the README's defaults apply unchanged. |
+| J3 | `docker-compose.yml` reads the container name from `POSTGRES_CONTAINER`, defaulting to `finsight-db`. | Lets two copies of the project run side by side; the default behaviour is unchanged. |
+| J4 | `docs/data_dictionary.md` is generated from the live database catalog, the field map and the metric registry (`scripts/build_data_dictionary.py`). | A hand-written dictionary of 382 columns would drift. Only each table's one-line purpose is written by hand, and the script fails if a table has none. |
+| J5 | Notebooks 05–07 read stored Data Science Lab results and do not retrain. | Same rule as the app; the notebooks then agree with the model cards by construction. |
+| J6 | Notebook interpretation text was checked against each notebook's printed output after execution, and corrected where it did not match (notebook 01's statement on volatility persistence). | An interpretation written before the result is a hypothesis, not a finding. |
+| J7 | Nothing was committed or pushed by the assistant. | Commits are the owner's to make. |

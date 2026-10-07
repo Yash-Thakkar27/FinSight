@@ -202,6 +202,12 @@ Each model card lists its own limitations. The ones that apply across the lab:
      star schema (CSV files and database views) and a written specification with DAX measures.
      The measures are written against the exported schema but have never been run.
 
+10t. **Source data is not redistributed.** Raw snapshots, processed files and exports are
+     excluded from the repository (`data/raw`, `data/processed`, `data/exports` are gitignored).
+     They come from Yahoo Finance and are regenerated locally by `scripts/update_data.py`, so a
+     fresh clone has no data until that is run, and a later fetch will not reproduce the exact
+     figures quoted in these documents.
+
 10s. **No PivotTables.** openpyxl cannot create them; `excel_guide.md` gives the manual steps.
 
 ## Methodology simplifications

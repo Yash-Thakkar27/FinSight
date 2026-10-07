@@ -1,7 +1,7 @@
 # Power BI model
 
 `python scripts/update_data.py` writes a star schema to `data/exports/powerbi/` as seven CSV
-files. The same tables exist as views in the PostgreSQL `mart` schema (`sql/schema.sql`), so Power
+files, plus one helper table (section 5). The files are generated, not kept in git. The same tables exist as views in the PostgreSQL `mart` schema (`sql/schema.sql`), so Power
 BI can also connect to the database directly.
 
 **Power BI Desktop runs on Windows only. No `.pbix` file is produced by this project.** This
@@ -257,10 +257,55 @@ CALCULATE ( AVERAGE ( fact_metrics[value] ), fact_metrics[metric_name] = "max_dr
 ```
 
 The pairwise correlation matrix is not part of the star schema (it is company × company, not a
-fact at a date). It is in `market_analysis.xlsx` and in the database table `core.correlations`;
-load it as an eighth table if the Risk page needs a heatmap.
+fact at a date). It is exported as the helper table `agg_return_correlation`: see section 5.
 
-## 5. Report layout (five pages)
+## 5. Helper table outside the star schema: `agg_return_correlation`
+
+`agg_return_correlation.csv` (2,028 rows) holds pairwise correlations of daily returns.
+
+| Column | Meaning |
+|---|---|
+| `company_a_key`, `company_b_key` | Both refer to `dim_company[company_key]` |
+| `window_label` | `1y`, `3y` or `full` (added so one window can be selected) |
+| `window_start`, `window_end` | Date range the correlation was measured over |
+| `correlation` | Pearson correlation of daily adjusted-close returns |
+| `n_obs` | Trading days in the sample, common to every ticker |
+
+It is company × company, so it is not a fact at the star schema's grain and is kept out of it.
+Both orderings and the diagonal are stored, so a matrix needs no reshaping.
+
+**Option A, no relationship to `dim_company` (simplest).** Load `dim_company` twice more in Power
+Query as `Company A` and `Company B` (reference queries keeping `company_key` and `ticker`).
+Relate `agg_return_correlation[company_a_key]` → `Company A[company_key]` and
+`[company_b_key]` → `Company B[company_key]`. Matrix visual: rows `Company A[ticker]`, columns
+`Company B[ticker]`, values:
+
+```DAX
+Correlation = AVERAGE ( agg_return_correlation[correlation] )
+```
+
+Add a slicer on `agg_return_correlation[window_label]` set to single-select, and conditional
+formatting on the values (white at 0, the accent colour at 1).
+
+**Option B, inactive relationships to the one `dim_company`.** Create both relationships from
+`agg_return_correlation` to `dim_company[company_key]` and leave **both inactive** (two active
+relationships between the same tables are not allowed, and an active one would make company
+slicers filter only one side). Use each explicitly:
+
+```DAX
+Avg Correlation With Others =
+CALCULATE (
+    AVERAGE ( agg_return_correlation[correlation] ),
+    USERELATIONSHIP ( agg_return_correlation[company_a_key], dim_company[company_key] ),
+    agg_return_correlation[company_a_key] <> agg_return_correlation[company_b_key],
+    agg_return_correlation[window_label] = "3y"
+)
+```
+
+This gives, for the company in context, its average correlation with every other ticker. A full
+matrix still needs Option A's second company table for the column axis.
+
+## 6. Report layout (five pages)
 
 Every page: a title bar "FinSight", the footer text "FinSight is an analytics tool, not investment
 advice. Data: yfinance, as of {latest price date}", one accent colour (#1F4E79) with greys, no
@@ -273,9 +318,9 @@ median"), never a judgement.
 | **2. Financial Performance** | Company (single), fiscal year | Column chart: `Revenue (₹ Cr)` and `Net Income (₹ Cr)` by `fiscal_year_label`. Line: `EBITDA Margin %` and `Net Margin %` by fiscal year. Card: `Revenue YoY %`, labelled "reporting-currency growth" with `reporting_currency`. Matrix: line items × fiscal year from `fact_financials`. Text box where `is_translated` is true: "translated from USD". |
 | **3. Comparable Companies** | Company (single) | Table: the company and its peers with `Current P/E`, `Current EV/EBITDA`, P/B, EV/Revenue. Cards: `Peer Median EV/EBITDA`, `Peers With A Value`, `EV/EBITDA Premium to Peer Median %`. Bar: EV/EBITDA by company within the peer group, with a constant line at the peer median. |
 | **4. Market Performance** | Company (multi), date range | Line: `Cumulative Return To Date %` by date, one line per company, plus `Benchmark Cumulative Return %`. Column: `Average Daily Volume (lakh)` by month. Table: `Cumulative Return %`, `Annualized Volatility %`, `Excess Return vs Benchmark %`. |
-| **5. Risk & Correlation** | Sector | Table: `Volatility 1Y %`, `Sharpe 1Y`, `Max Drawdown 3Y %` by company. Scatter: volatility (x) against 1Y return (y), one point per company, coloured by sector. Matrix heatmap of correlations if `core.correlations` is loaded. Text box: "With about five years of data, differences between Sharpe ratios are not statistically established (see the Data Science Lab)." |
+| **5. Risk & Correlation** | Sector | Table: `Volatility 1Y %`, `Sharpe 1Y`, `Max Drawdown 3Y %` by company. Scatter: volatility (x) against 1Y return (y), one point per company, coloured by sector. Matrix heatmap from `agg_return_correlation` (section 5). Text box: "With about five years of data, differences between Sharpe ratios are not statistically established (see the Data Science Lab)." |
 
-## 6. Things to keep consistent with the rest of FinSight
+## 7. Things to keep consistent with the rest of FinSight
 
 - **Banks:** EBITDA margin, EV/EBITDA, debt/equity and liquidity ratios are blank for banks, with
   `na_reason` = "N/A (not meaningful for banks)". Show "N/A", never 0.
