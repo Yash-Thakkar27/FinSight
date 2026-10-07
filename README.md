@@ -59,7 +59,7 @@ Public source → Ingestion → Raw snapshot (immutable) → Cleaning → Valida
 | Data Science Lab | Volatility forecasting with walk-forward evaluation against naive baselines; peer clustering validated against sector labels; statistical tests with effect sizes, confidence intervals and multiple-comparison correction; regime detection; Isolation Forest comparison |
 | App | Seven Streamlit pages that read only from PostgreSQL |
 | Exports | Three Excel workbooks with live formulas; a star schema for Power BI as CSV files and database views, with documented DAX measures |
-| Tests | 200 tests, 97% coverage, no network calls; expected values are hand-calculated |
+| Tests | 202 tests, 97% coverage, no network calls; expected values are hand-calculated |
 
 ## Architecture
 
@@ -173,7 +173,7 @@ Then initialize, load data, run the models and start the app:
 python scripts/init_db.py       # schemas, tables, views, reference data
 python scripts/update_data.py   # fetch, clean, validate, load, metrics, exports (about 3 minutes)
 python scripts/run_ml.py        # Data Science Lab and model cards (about a minute)
-pytest                          # 200 tests
+pytest                          # 202 tests
 streamlit run app/Home.py       # http://localhost:8501
 ```
 
@@ -184,6 +184,8 @@ Notes:
 - To run a second copy of the project on the same machine, give it its own
   `POSTGRES_PORT` and `POSTGRES_CONTAINER` in `.env`.
 - `update_data.py` needs internet access. Everything after it works offline.
+- To keep the app off your local network, start it with
+  `streamlit run app/Home.py --server.address localhost`.
 
 **PostgreSQL through Homebrew instead of Docker** (written but not verified on the development
 machine):
@@ -238,6 +240,13 @@ streamlit run app\Home.py
 | `psql -h localhost -p 5433 -U finsight -d finsight -f sql/analytical_queries.sql` | Example analytical queries. |
 
 Logs go to the console and to `logs/finsight.log`.
+
+## Deployment
+
+The app can be hosted on Streamlit Community Cloud over a hosted PostgreSQL database; the
+pipeline and models keep running locally. Steps: [`docs/deployment.md`](docs/deployment.md).
+The repository is prepared for this (`app/requirements.txt`, `.streamlit/secrets.toml.example`,
+`POSTGRES_SSLMODE`), but no deployment is live.
 
 ## Generated files
 
@@ -328,7 +337,7 @@ FinSight/
 ├── scripts/             init_db, update_data, run_ml, inspect_source, build_data_dictionary
 ├── sql/                 schema.sql, indexes.sql, analytical_queries.sql
 ├── notebooks/           01–07 (executed; read from the database, call src/)
-├── tests/               200 tests
+├── tests/               202 tests
 ├── docs/                methodology, assumptions, limitations, architecture, data_dictionary,
 │                        excel_guide, powerbi_model, model_cards/
 └── data/                raw/, processed/, exports/  (all generated, none in git)
@@ -374,6 +383,7 @@ The full list, with the evidence for each, is in [`docs/limitations.md`](docs/li
 | [`docs/model_cards/`](docs/model_cards/) | One card per model, generated from stored results |
 | [`docs/excel_guide.md`](docs/excel_guide.md) | The Excel workbooks and how to add a PivotTable |
 | [`docs/powerbi_model.md`](docs/powerbi_model.md) | Star schema, relationships, DAX measures, report layout |
+| [`docs/deployment.md`](docs/deployment.md) | Hosting the app on Streamlit Community Cloud |
 | [`notebooks/`](notebooks/) | 01 EDA · 02 ratios · 03 comps · 04 risk and statistical tests · 05 volatility forecasting · 06 clustering · 07 anomalies and regimes |
 
 *FinSight is an analytics tool, not investment advice.*

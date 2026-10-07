@@ -176,7 +176,7 @@ experiment was run and none was changed after seeing results.
 | H1 | Seven pages: `app/Home.py` is the Overview, and `app/pages/` holds 01 Company Analysis, 02 Comparable Companies, 03 Market Analytics, 04 Risk Analytics, 05 Data Science Lab, 06 Data Quality. | The spec's file list numbers the pages 01–07 alongside a `Home.py`, which would make eight files for seven pages. Using `Home.py` as the Overview keeps seven; the last two page numbers are therefore one lower than in the spec. |
 | H2 | The app reads only through `src/database/queries.py` (parameterized SQL) and imports no data-source or HTTP library. A test fails if it does, and each page is run with outbound connections blocked. | "Read from PostgreSQL only. Never call external APIs from the app." |
 | H3 | Cached with `st.cache_data` for 10 minutes, and every loader is also keyed on the latest pipeline run and Data Science Lab run (re-checked every 30 seconds). | A refresh changes the key, so new data appears without waiting for the 10-minute expiry and without a manual cache clear. |
-| H4 | The server is bound to `localhost` and Streamlit usage statistics are off (`.streamlit/config.toml`). | Streamlit otherwise looks up the machine's external IP when started headless, which is an outbound call, and would serve the app to the local network. |
+| H4 | Streamlit usage statistics are off. The bind address is not fixed in `.streamlit/config.toml`; a local run can pass `--server.address localhost`. | Usage statistics are an outbound call. The address was first fixed to `localhost`, then removed when the app was prepared for hosting (K2), because a host must be able to reach the server. Without the flag a local run is visible on the local network, and a headless start looks up the external IP address. |
 | H5 | A missing figure shows `N/A` with the stored reason beneath it; a chart with nothing to plot is replaced by the reason. Suppressed peer statistics (n < 4) show a dash, not N/A. | N/A and "suppressed" mean different things and should not look the same. A missing value is never drawn as zero. |
 | H6 | Figures carry their caveats where they appear: "translated from USD", "reporting-currency growth (USD)", "closing balance used", "latest annual figure (TTM unavailable)". | Decisions D4, D6 and D10. |
 | H7 | The Comparable Companies page recomputes with `src/analytics/comps.py` when the peer set is changed, from stored metrics. | The same functions the pipeline uses for the default peer set, so the two cannot disagree. |
@@ -220,3 +220,16 @@ How to use the files is in `excel_guide.md` and `powerbi_model.md`.
 | J5 | Notebooks 05–07 read stored Data Science Lab results and do not retrain. | Same rule as the app; the notebooks then agree with the model cards by construction. |
 | J6 | Notebook interpretation text was checked against each notebook's printed output after execution, and corrected where it did not match (notebook 01's statement on volatility persistence). | An interpretation written before the result is a hypothesis, not a finding. |
 | J7 | Nothing was committed or pushed by the assistant. | Commits are the owner's to make. |
+
+## Deployment preparation (Streamlit Community Cloud)
+
+Steps are in `deployment.md`. **The app has not been deployed**; these changes make it deployable.
+
+| # | Assumption | Reason |
+|---|---|---|
+| K1 | Only the app is hosted. The pipeline and the Data Science Lab run on the owner's machine and load a hosted PostgreSQL database. | The app is read-only by design; the host needs no data-source access, no model libraries and no scheduled jobs. |
+| K2 | The bind address was removed from `.streamlit/config.toml` (see H4). | A hosting service reaches the server from outside the container; a fixed `localhost` would make the app unreachable. |
+| K3 | `app/requirements.txt` lists the 10 packages the app imports, pinned to the same versions as the root file (a test checks this). | Streamlit Community Cloud installs the requirements file beside the entry point. 49 installed packages instead of 126: faster builds and less memory, and no data-source or model library on the host. |
+| K4 | Database settings come from `POSTGRES_*` environment variables, with `POSTGRES_SSLMODE` optional; the user name and password are percent-encoded in the connection URL. | Streamlit exposes root-level secrets as environment variables, so no code path is specific to the host. Hosted databases require SSL and generate passwords with URL-special characters. |
+| K5 | The hosted database is loaded with `--skip-fetch` from the raw snapshots on disk. | The hosted app then shows exactly the data that was verified locally. |
+| K6 | The deployment was verified by simulation only: a clean copy with no `.env`, only `app/requirements.txt` installed, settings from environment variables, all seven pages run headlessly against the local database. | Creating the hosted database and the Streamlit app needs the owner's accounts. SSL to a hosted database and the Streamlit build itself are therefore untested. |

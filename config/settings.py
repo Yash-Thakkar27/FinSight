@@ -11,6 +11,7 @@ from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote_plus
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -37,14 +38,22 @@ class DatabaseSettings(BaseSettings):
     postgres_db: str
     postgres_host: str = "localhost"
     postgres_port: int = 5433
+    # Set to "require" for a hosted database (Neon, Supabase, ...). Unset for local Docker.
+    postgres_sslmode: str | None = None
 
     @property
     def url(self) -> str:
-        """SQLAlchemy URL using the psycopg (v3) driver."""
-        return (
-            f"postgresql+psycopg://{self.postgres_user}:{self.postgres_password}"
+        """SQLAlchemy URL using the psycopg (v3) driver.
+
+        The user name and password are percent-encoded, so a generated password
+        containing characters such as @ or / cannot break the URL.
+        """
+        url = (
+            f"postgresql+psycopg://{quote_plus(self.postgres_user)}:"
+            f"{quote_plus(self.postgres_password)}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
+        return f"{url}?sslmode={self.postgres_sslmode}" if self.postgres_sslmode else url
 
 
 class IngestionSettings(BaseSettings):

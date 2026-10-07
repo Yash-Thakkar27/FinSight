@@ -78,7 +78,7 @@ verified.
 | Windows setup, Homebrew PostgreSQL | **Not verified** | Written only. |
 | Tier 3 (health score, MLflow, beta and tracking error) | **Not built** | Optional in the spec. Docker Compose (also Tier 3) is used for PostgreSQL. |
 
-Tests: 200 passing, 97% coverage of `src/` (96% with `app/`), no network calls.
+Tests: 202 passing, 97% coverage of `src/` (96% with `app/`), no network calls.
 
 ## 4. Limitations and deviations from the spec
 
@@ -171,7 +171,7 @@ Every figure is from a recorded run.
 - Engineered a metric registry of 42 formulas with sector-applicability rules (bank ratios return
   "N/A", never a number), reporting-currency handling for a USD filer, and split-adjusted EPS that
   removed a spurious 50% EPS drop caused by inconsistent source data.
-- Wrote 200 automated tests (97% coverage) with hand-calculated expected values, running without
+- Wrote 200+ automated tests (97% coverage) with hand-calculated expected values, running without
   network access; delivered Excel workbooks with live formulas and a Power BI-ready star schema
   with documented DAX measures.
 

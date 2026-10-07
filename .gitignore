@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 .env
+.env.cloud
+.streamlit/secrets.toml
 .pytest_cache/
 .ruff_cache/
 .coverage

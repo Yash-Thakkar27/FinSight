@@ -16,6 +16,6 @@ gatherUsageStats = false
 toolbarMode = "minimal"
 
 [server]
-# Serve on this machine only. This also stops Streamlit looking up the external IP address
-# at startup, which is an outbound call.
-address = "localhost"
+# No bind address is set here, so the same file works locally and on a hosting service.
+# To keep a local run off your network (and stop Streamlit looking up the external IP
+# address when started headless), start it with:  --server.address localhost

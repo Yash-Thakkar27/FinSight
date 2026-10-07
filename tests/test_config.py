@@ -4,7 +4,13 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from config.settings import CONFIG_DIR, RiskFreeRate, Universe, get_universe
+from config.settings import (
+    CONFIG_DIR,
+    DatabaseSettings,
+    RiskFreeRate,
+    Universe,
+    get_universe,
+)
 
 SECTOR_TYPES = {"non_financial", "bank", "nbfc", "insurance"}
 
@@ -69,3 +75,34 @@ def test_field_map_statements_have_units_and_sources():
             assert set(spec.get("applies_to", [])) <= SECTOR_TYPES, canonical
     # capex is negative at source and stored as a positive outflow
     assert field_map["cashflow"]["capex"]["sign"] == -1
+
+
+def database(**overrides) -> DatabaseSettings:
+    values = {"postgres_user": "finsight", "postgres_password": "pw", "postgres_db": "finsight",
+              "postgres_host": "localhost", "postgres_port": 5433, "postgres_sslmode": None}
+    return DatabaseSettings(_env_file=None, **(values | overrides))
+
+
+def test_database_url_for_local_and_hosted_databases():
+    assert database().url == "postgresql+psycopg://finsight:pw@localhost:5433/finsight"
+    hosted = database(postgres_host="ep-x.aws.neon.tech", postgres_port=5432,
+                      postgres_sslmode="require")
+    assert hosted.url == \
+        "postgresql+psycopg://finsight:pw@ep-x.aws.neon.tech:5432/finsight?sslmode=require"
+    # a generated password with URL-special characters is percent-encoded
+    tricky = database(postgres_password="p@ss/w:rd#1")
+    assert tricky.url == \
+        "postgresql+psycopg://finsight:p%40ss%2Fw%3Ard%231@localhost:5433/finsight"
+
+
+def test_app_requirements_are_a_pinned_subset_of_the_project_requirements():
+    """The hosted app installs app/requirements.txt: same versions as the root file."""
+    def pins(path):
+        return {line.split("==")[0]: line.split("==")[1].split()[0]
+                for line in path.read_text().splitlines()
+                if "==" in line and not line.startswith("#")}
+
+    root = CONFIG_DIR.parent
+    app, project = pins(root / "app" / "requirements.txt"), pins(root / "requirements.txt")
+    assert {"streamlit", "plotly", "pandas", "SQLAlchemy", "psycopg[binary]"} <= set(app)
+    assert all(project.get(name) == version for name, version in app.items())
